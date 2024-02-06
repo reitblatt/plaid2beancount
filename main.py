@@ -53,48 +53,62 @@ client = plaid_api.PlaidApi(api_client)
         
 for item in PlaidItem.select():
     access_token = item.access_token
-    if item.cursor is not None:
-        request = TransactionsSyncRequest(
-            access_token=item.access_token,
-            cursor=item.cursor,
-            count=1,
-        )
-    else:
-        request = TransactionsSyncRequest(
-            access_token=item.access_token,         
-            count=1,
-        )                
-        
-    response = client.transactions_sync(request)
-    transactions = response['added']
+    cursor = item.cursor
+    if cursor is None:        
+        cursor = ''
+    has_more = True
     
-    for transaction in transactions:
-        print(transaction)
-        if transaction['personal_finance_category'] is not None:            
-            category, created = FinanceCategory.get_or_create(
-                detailed=transaction['personal_finance_category']['detailed'],
-                defaults={'primary': transaction['personal_finance_category']['primary'], 'description': "Unknown (Plaid added a new category!)"}                
+    while has_more:
+        request = TransactionsSyncRequest(
+            access_token=access_token,
+            cursor=cursor,
+            count=100,
+        )
+        
+            
+        response = client.transactions_sync(request)
+        transactions = response['added']
+        has_more = response['has_more']
+        # Update cursor to the next cursor
+        cursor = response['next_cursor']
+        
+        for transaction in transactions:
+            print(transaction)
+            if transaction['personal_finance_category'] is not None:            
+                category, created = FinanceCategory.get_or_create(
+                    detailed=transaction['personal_finance_category']['detailed'],
+                    defaults={'primary': transaction['personal_finance_category']['primary'], 'description': "Unknown (Plaid added a new category!)"}                
+                )
+                if created:
+                    # Uh oh! Plaid added a new category...                
+                    category.save()
+                    
+                confidence = transaction['personal_finance_category']['confidence_level']
+                
+            account, created = Account.get_or_create(
+                plaid_id=transaction['account_id'],
+                defaults={'name': "Unknown account found during Plaid sync!", 'item': item}            
             )
             if created:
-                # Uh oh! Plaid added a new category...                
-                category.save()
-                
-            confidence = transaction['personal_finance_category']['confidence_level']
+                account.save()
+                    
+            PlaidTransaction(
+                date=transaction['date'],
+                datetime=transaction['datetime'],
+                authorized_date=transaction['authorized_date'],
+                authorized_datetime=transaction['authorized_datetime'],        
+                name=transaction['name'],
+                merchant_name=transaction['merchant_name'],
+                website=transaction['website'],
+                amount=transaction['amount'],
+                check_number=transaction['check_number'],
+                transaction_id=transaction['transaction_id'],
+                account=account,
+                personal_finance_category=category,
+                personal_finance_confidence=confidence,
+                pending=transaction['pending']
+            ).save()
             
-        account, created = Account.get_or_create(
-            plaid_id=transaction['account_id'],
-            defaults={'name': "Unknown account found during Plaid sync!", 'item': item}            
-        )
-        if created:
-            account.save()
-                
-        PlaidTransaction(
-            date=transaction['date'],            
-            name=transaction['name'],
-            amount=transaction['amount'],
-            transaction_id=transaction['transaction_id'],
-            account=account,
-            personal_finance_category=category,
-            personal_finance_confidence=confidence,
-            pending=transaction['pending']
-        ).save()
+        # Save the cursor for the next time we sync
+        item.cursor = cursor
+        item.save()
