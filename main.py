@@ -1,7 +1,7 @@
 import plaid
 from plaid.api import plaid_api
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
-from beancount import loader
+from beancount import loader, core
 from models import *
 import configparser
 import argparse
@@ -63,6 +63,14 @@ def _parse_args_and_load_config():
         action='store_true',
         help=(
             'output transactions to a STDOUT in beancount format'
+        )
+    )
+    
+    parser.add_argument(
+        '--root-file',
+        metavar='STR', 
+        help=(
+            'specify the path to the root file for beancount'
         )
     )
 
@@ -137,6 +145,14 @@ def _update_transactions(client: plaid_api.PlaidApi):
             print("No more transactions to sync for item {0}".format(item.item_id))
     
 
+def _load_beancount_accounts(file_path):
+    entries, errors, options = loader.load_file(file_path)
+    # We want to pull out just the accounts and metadat
+    accounts = [entry for entry in entries if isinstance(entry, core.data.Open)]
+    
+    # convert accounts to a dict from plaid_id to account
+    return {account.meta['short_name']: account for account in accounts if 'short_name' in account.meta}    
+
 def main():
     args = _parse_args_and_load_config()
     
@@ -147,6 +163,10 @@ def main():
     config = configparser.ConfigParser()
     config.read(file_path)            
 
+    # Load the beancount file
+    bc_accounts = _load_beancount_accounts(args.root_file)    
+
+    # Get the Plaid configuration from the TOML file
     client_id = config["PLAID"]["client_id"]
     secret = config["PLAID"]["secret"]
 
@@ -161,18 +181,27 @@ def main():
         # First, check if the parent item (institution) exists
         item, created = PlaidItem.get_or_create(
             item_id=item_id,
-            defaults={'access_token': access_token, }        
+            defaults={'access_token': access_token,}
         )
         
         if created:
-            item.save()
+            item.save()                    
             
+        if account_name in bc_accounts:
+            beancount_account = bc_accounts[account_name].account
+        else:
+            beancount_account = None
         account, created = Account.get_or_create(
             plaid_id=account_id,
-            defaults={'name': account_name, 'item': item},        
+            defaults={'name': account_name, 'item': item, 'beancount_name': beancount_account},        
         )
         if created:    
             account.save()
+        else:
+            # update the account name if it's changed
+            if account.beancount_name != beancount_account:
+                account.beancount_name = beancount_account
+                account.save()
                             
     configuration = plaid.Configuration(
         host=plaid.Environment.Production,

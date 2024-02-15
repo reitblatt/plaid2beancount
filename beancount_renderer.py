@@ -31,7 +31,7 @@ class BeancountRenderer:
             tags=set(),
             links=set(),
             postings=[
-                Posting(account, Amount(transaction.amount, 'USD'), None, None, None, None),
-                Posting(expense_account, Amount(-transaction.amount, 'USD'), None, None, None, None),
+                Posting(account, Amount(-transaction.amount, 'USD'), None, None, None, None),
+                Posting(expense_account, Amount(transaction.amount, 'USD'), None, None, None, None),
             ],
         )
