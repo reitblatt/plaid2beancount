@@ -189,8 +189,10 @@ def main():
         _update_transactions(client)
     if args.output_transactions:
         # Print out new categories
-        for transaction in PlaidTransaction.select():
-            print(transaction)
+        from beancount_renderer import BeancountRenderer
+        renderer = BeancountRenderer(PlaidTransaction.select())
+        for entry in renderer.print():
+            print(entry)
         
         
         

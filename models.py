@@ -47,7 +47,7 @@ class PlaidTransaction(Model):
     pending = BooleanField()
 
     class Meta:
-        database = db
+        database = db            
         
         
 db.connect()
