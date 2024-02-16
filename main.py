@@ -150,8 +150,10 @@ def _load_beancount_accounts(file_path):
     # We want to pull out just the accounts and metadat
     accounts = [entry for entry in entries if isinstance(entry, core.data.Open)]
     
+    short_names = {account.meta['short_name']: account.account for account in accounts if 'short_name' in account.meta}
+    expense_accounts = {account.meta['plaid_category']: account.account for account in accounts if 'plaid_category' in account.meta}
     # convert accounts to a dict from plaid_id to account
-    return {account.meta['short_name']: account for account in accounts if 'short_name' in account.meta}    
+    return short_names, expense_accounts
 
 def main():
     args = _parse_args_and_load_config()
@@ -164,7 +166,16 @@ def main():
     config.read(file_path)            
 
     # Load the beancount file
-    bc_accounts = _load_beancount_accounts(args.root_file)    
+    bc_accounts, expense_accounts = _load_beancount_accounts(args.root_file)
+    
+    # update expense accounts with the new accounts
+    for category in FinanceCategory.select():
+        if category.detailed in expense_accounts:
+            category.expense_account = expense_accounts[category.detailed]
+        else:
+            category.expense_account = None
+        
+        category.save()  
 
     # Get the Plaid configuration from the TOML file
     client_id = config["PLAID"]["client_id"]
@@ -188,7 +199,7 @@ def main():
             item.save()                    
             
         if account_name in bc_accounts:
-            beancount_account = bc_accounts[account_name].account
+            beancount_account = bc_accounts[account_name]
         else:
             beancount_account = None
         account, created = Account.get_or_create(
@@ -219,7 +230,15 @@ def main():
     if args.output_transactions:
         # Print out new categories
         from beancount_renderer import BeancountRenderer
-        renderer = BeancountRenderer(PlaidTransaction.select())
+        # filter by date
+        query = PlaidTransaction.select()
+        if args.from_date is not None:
+            query = query.where(PlaidTransaction.date >= args.from_date)
+        if args.to_date is not None:
+            query = query.where(PlaidTransaction.date <= args.to_date)
+        
+        query = query.order_by(PlaidTransaction.date)
+        renderer = BeancountRenderer(query)
         for entry in renderer.print():
             print(entry)
         

@@ -6,7 +6,7 @@ class BeancountRenderer:
         
     def __init__(self, transactions: PlaidTransaction):
         self.transactions = [self._to_beancount(transaction) for transaction in transactions]                        
-        self._printer = EntryPrinter()
+        self._printer = EntryPrinter()        
         
     def print(self) -> [str]:
         return [self._printer(transaction) for transaction in self.transactions]
@@ -15,7 +15,7 @@ class BeancountRenderer:
         if transaction.personal_finance_category.expense_account is not None:
             expense_account = transaction.personal_finance_category.expense_account
         else:
-            expense_account = 'Expenses:Unknown'        
+            expense_account = 'Unknown: ' + transaction.personal_finance_category.detailed
             
         if transaction.account.beancount_name is not None:
             account = transaction.account.beancount_name
