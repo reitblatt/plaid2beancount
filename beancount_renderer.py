@@ -6,7 +6,7 @@ class BeancountRenderer:
         
     def __init__(self, transactions: PlaidTransaction):
         self.transactions = [self._to_beancount(transaction) for transaction in transactions]                        
-        self._printer = EntryPrinter()        
+        self._printer = EntryPrinter()
         
     def print(self) -> [str]:
         return [self._printer(transaction) for transaction in self.transactions]
@@ -27,7 +27,7 @@ class BeancountRenderer:
             date=transaction.date,
             payee=transaction.merchant_name,
             narration=transaction.name,            
-            flag='',
+            flag='*',
             tags=set(),
             links=set(),
             postings=[
