@@ -27,7 +27,7 @@ class BeancountRenderer:
             date=transaction.date,
             payee=transaction.merchant_name,
             narration=transaction.name,            
-            flag='*',
+            flag='!',
             tags=set(),
             links=set(),
             postings=[
