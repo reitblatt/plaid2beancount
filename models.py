@@ -38,11 +38,11 @@ class PlaidTransaction(Model):
     merchant_name = CharField(null=True, default=None)
     website = CharField(null=True, default=None)
     amount = DecimalField()
-    # iso_currency_code = CharField()
+    unit = CharField(default='USD')
     check_number = CharField(null=True, default=None)
     transaction_id = CharField(unique=True)    
     account = ForeignKeyField(Account)
-    personal_finance_category = ForeignKeyField(FinanceCategory)
+    personal_finance_category = ForeignKeyField(FinanceCategory,null=True, default=None)
     personal_finance_confidence = CharField(choices=['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'], default='UNKNOWN')
     pending = BooleanField()
 

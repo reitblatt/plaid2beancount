@@ -1,6 +1,10 @@
+from datetime import date, timedelta
 import plaid
 from plaid.api import plaid_api
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
+from plaid.model.accounts_get_request import AccountsGetRequest
+from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
+from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions
 from beancount import loader, core
 from models import *
 import configparser
@@ -92,13 +96,98 @@ def _parse_args_and_load_config():
             'print out the list of accounts'
         )
     )
+    
+    parser.add_argument(
+        '--list-items',
+        action='store_true',
+        help=(
+            'print out the details of the Plaid API items (institutions)'
+        )
+    )
 
 
     args = parser.parse_args()
     
     return args
 
+def _get_accounts_status(client: plaid_api.PlaidApi):
+    for item in PlaidItem.select():
+        access_token = item.access_token
+        request = AccountsGetRequest(
+            access_token=access_token,            
+        )
+        
+        response = client.accounts_get(request)
+        print(response['accounts'])
 
+def _update_investments(client: plaid_api.PlaidApi, start_date=None, end_date=None):
+    for item in PlaidItem.select():
+        access_token = item.access_token
+        if start_date is None:
+            # If date not set, set to today minus 2 years
+            start_date = (date.today() - timedelta(days=365*2))
+        if end_date is None:
+            end_date = date.today() 
+        
+        request = InvestmentsTransactionsGetRequest(
+                access_token=access_token,
+                start_date=start_date,
+                end_date=end_date,                
+            )
+        
+        try:
+            response = client.investments_transactions_get(request)
+            investment_transactions = response['investment_transactions']
+            securities = {security['security_id']: security for security in response['securities']}
+        except plaid.ApiException as e:
+            print(e)
+            print("Error getting investment transactions for item {0}".format(item.item_id))
+            continue            
+                
+        while len(investment_transactions) < response['total_investment_transactions']:
+            request = InvestmentsTransactionsGetRequest(
+                access_token=access_token,
+                start_date=start_date,
+                end_date=end_date,
+                options=InvestmentsTransactionsGetRequestOptions(
+                    offset=len(investment_transactions)
+                )
+            )
+            response = client.investments_transactions_get(request)
+            securities |= {security['security_id']: security for security in response['securities']}
+            investment_transactions.extend(response['transactions'])
+
+        for transaction in investment_transactions:
+            print(transaction)
+            account, created = Account.get_or_create(
+                plaid_id=transaction['account_id'],
+                defaults={'name': "Unknown account found during Plaid sync!", 'item': item}            
+            )
+            if created:
+                account.save()
+                
+            if transaction['security_id'] is not None:
+                unit = securities[transaction['security_id']]['ticker_symbol']
+                    
+            PlaidTransaction(
+                date=transaction['date'],                
+                name=transaction['name'],                            
+                amount=transaction['amount'],                
+                transaction_id=transaction['investment_transaction_id'],
+                account=account,
+                unit=unit,
+                pending=False
+            ).save()
+            
+            print(transaction)
+        
+def _list_items(client: plaid_api.PlaidApi):
+    for item in PlaidItem.select():        
+        request = AccountsGetRequest(access_token=item.access_token)
+        response = client.accounts_get(request)
+        accounts = response['accounts']
+        print(accounts)
+    
 def _update_transactions(client: plaid_api.PlaidApi):
     for item in PlaidItem.select():
         access_token = item.access_token
@@ -252,9 +341,11 @@ def main():
             
     if args.sync_all_transactions:
         _update_transactions(client)
+        _update_investments(client)
     if args.list_accounts:
-        for account in Account.select():
-            print(account.name)
+        _get_accounts_status(client)
+        # for account in Account.select():
+        #     print(account.name)
     if args.output_transactions:
         from beancount_renderer import BeancountRenderer
         query = PlaidTransaction.select()
@@ -270,6 +361,8 @@ def main():
         renderer = BeancountRenderer(query)
         for entry in renderer.print():
             print(entry)
+    if args.list_items:
+        _list_items(client)        
         
         
         
