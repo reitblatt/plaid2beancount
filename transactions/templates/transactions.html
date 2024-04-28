@@ -1,0 +1,30 @@
+<!-- FILEPATH: /Users/reitblatt/Dropbox/Projects/plaid2beancount/transactions/templates/transactions.html -->
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Transactions</title>
+</head>
+<body>
+    <h1>Transactions</h1>
+    <ul>
+        {% for transaction in transactions %}
+            <li>
+                <strong>Date:</strong> {{ transaction.date }}<br>
+                <strong>Description:</strong> {{ transaction.description }}<br>
+                <strong>Amount:</strong> {{ transaction.amount }}<br>
+            </li>
+        {% endfor %}
+        {% for transaction in investment_transactions %}
+            <li>
+                <strong>Date:</strong> {{ transaction.date }}<br>
+                <strong>Account:</strong> {{ transaction.account }}<br>
+                <strong>Security:</strong> {{ transaction.security }}<br>
+                <strong>Quantity:</strong> {{ transaction.quantity }}<br>
+                <strong>Price:</strong> {{ transaction.price }}<br>
+                <strong>Amount:</strong> {{ transaction.amount }}<br>
+            </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>

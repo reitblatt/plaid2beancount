@@ -35,6 +35,7 @@ class Account(models.Model):
     plaid_id = models.CharField(max_length=255, unique=True)
     item = models.ForeignKey(PlaidItem, on_delete=models.CASCADE, related_name='accounts')
     type = models.CharField(max_length=255, choices=ACCOUNT_TYPES)
+    last_updated = models.DateTimeField(null=True, default=None)
     
     def __str__(self):
         if self.name is not None:
@@ -67,7 +68,6 @@ class PlaidTransaction(models.Model):
     personal_finance_confidence = models.CharField(max_length=10, choices=CONFIDENCE_CHOICES, default='UNKNOWN')
     pending = models.BooleanField()
     
-
 class PlaidSecurity(models.Model):
     security_id = models.CharField(max_length=255, unique=True)
     name = models.CharField(max_length=255)
@@ -80,7 +80,7 @@ class PlaidSecurity(models.Model):
     
     def __str__(self) -> str:
         return self.name
-
+        
 class PlaidInvestmentTransactionType(models.Model):
     type = models.CharField(max_length=255)
     subtype = models.CharField(max_length=255)
@@ -91,17 +91,11 @@ class PlaidInvestmentTransactionType(models.Model):
     def __str__(self) -> str:
         return f'{self.type} - {self.subtype}'
     
-class PlaidInvestmentTransaction(models.Model):
-    TRANSACTION_TYPES = [
-        ('buy', 'Buy'),
-        ('sell', 'Sell'),        
-        ('cancel', 'Cancel'),
-        ('fee', 'Fee'),
-        ('transfer', 'Transfer'),        
-    ]    
+class PlaidInvestmentTransaction(models.Model):    
     
     date = models.DateField()
     name = models.CharField(max_length=255)
+    quantity = models.DecimalField(max_digits=10, decimal_places=3)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     security = models.ForeignKey(PlaidSecurity, on_delete=models.CASCADE)
@@ -109,6 +103,8 @@ class PlaidInvestmentTransaction(models.Model):
     cancel_transaction_id = models.CharField(max_length=255, null=True, blank=True)
     investment_transaction_id = models.CharField(max_length=255, unique=True)
     iso_currency_code = models.CharField(max_length=255, null=True, blank=True, default='USD')    
-    type = models.ForeignKey(PlaidInvestmentTransactionType, on_delete=models.CASCADE)    
+    type = models.ForeignKey(PlaidInvestmentTransactionType, on_delete=models.CASCADE)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE)
 
-# Create your models here.
+    def __str__(self) -> str:
+        return f'{self.name} - {self.type} - {self.date} - {self.amount}'

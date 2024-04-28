@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Starting Page</title>
+  </head>
+  <body>
+    <h1>Welcome to the Starting Page!</h1>
+    <form action="load_configuration/" method="post">
+      {% csrf_token %}
+      <input type="submit" value="Load config file" />
+    </form>
+    <form action="update_transactions/" method="post">
+      {% csrf_token %}
+      <input type="submit" value="Pull new transactions" />
+    </form>
+  </body>
+</html>
