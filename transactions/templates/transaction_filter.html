@@ -1,0 +1,30 @@
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <input type="submit" value="Filter transactions">
+</form>
+
+<form method="post" action="{% url 'output_beancount' %}">
+    {% csrf_token %}
+    <input type="checkbox" id="select_all" name="select_all" onclick="toggleCheckboxes(this)"> Select All<br>
+    <ul>
+    {% for transaction in transactions %}
+        <li>
+            <input type="checkbox" class="transaction-checkbox" name="transactions" value="{{ transaction.id }}">
+            {{ transaction.date }}: {{ transaction.name }} {{ transaction.amount }}
+        </li>
+    {% empty %}
+        <li>No transactions found.</li>
+    {% endfor %}
+    </ul>
+    <input type="submit" value="Output in Beancount Format">
+</form>
+
+<script>
+function toggleCheckboxes(source) {
+    checkboxes = document.getElementsByClassName('transaction-checkbox');
+    for(var i=0, n=checkboxes.length;i<n;i++) {
+        checkboxes[i].checked = source.checked;
+    }
+}
+</script>

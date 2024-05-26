@@ -13,5 +13,6 @@
       {% csrf_token %}
       <input type="submit" value="Pull new transactions" />
     </form>
+    <a href="{% url 'transaction_filter' %}">View transactions</a>    
   </body>
 </html>

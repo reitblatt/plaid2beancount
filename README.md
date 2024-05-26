@@ -6,8 +6,7 @@ This is a simple Python application that downloads transactions from Plaid, stor
 
 - Python 3.6 or higher
 - Plaid API credentials
-- SQLite
-- Peewee ORM
+- Django
 - Beancount
 
 ## Installation
@@ -16,7 +15,7 @@ This is a simple Python application that downloads transactions from Plaid, stor
 2. Install the required Python packages using pip:
 
 ```bash
-pip install plaid-python sqlite3 peewee beancount
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -24,13 +23,17 @@ Set your Plaid API credentials in the script:
 PLAID_CLIENT_ID = 'your_plaid_client_id'
 PLAID_SECRET = 'your_plaid_secret'
 PLAID_PUBLIC_KEY = 'your_plaid_public_key'
-PLAID_ENV = 'sandbox'  # or 'development' or 'production'
+PLAID_ENV = 'sandbox'  # or 'production'
+
+Please replace 'your_plaid_client_id', 'your_plaid_secret', and 'your_plaid_public_key' with your actual Plaid API credentials. Also, adjust the PLAID_ENV as per your environment.
 
 Because I started this project as a migration for plaid2text, 
 Configure account matching in your beancount file.
 
 ### Run the script:
-`python main.py`
+`python manage.py runserver`
+
+You can access the web app at http://localhost:8000/transactions
 
 By default, the script will download transactions from the Plaid API, store them in a SQLite database, and print them in Beancount format.
 
@@ -47,5 +50,3 @@ The script accepts the following command-line arguments:
 This project is licensed under the MIT License.
 
 ```
-
-Please replace 'your_plaid_client_id', 'your_plaid_secret', and 'your_plaid_public_key' with your actual Plaid API credentials. Also, adjust the PLAID_ENV as per your environment.

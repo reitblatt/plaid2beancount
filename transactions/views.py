@@ -14,7 +14,8 @@ import datetime
 from datetime import date, timedelta
 
 from .models import PlaidItem, Account, FinanceCategory, PlaidTransaction, PlaidInvestmentTransaction, PlaidSecurity, PlaidInvestmentTransactionType
-
+from .forms import TransactionFilterForm
+from .beancount_renderer import BeancountRenderer
 
 def starting_page(request):
     return render(request, 'starting_page.html')
@@ -274,21 +275,25 @@ def _update_investments(client: plaid_api.PlaidApi, start_date=None, end_date=No
             if created:
                 transaction_type.save()
                 
-            new_transaction = PlaidInvestmentTransaction(
-                date=transaction["date"],
-                name=transaction["name"],
-                quantity=transaction["quantity"],
-                amount=transaction["amount"],
-                price=transaction["price"],
+            new_transaction, created = PlaidInvestmentTransaction.objects.get_or_create(
                 investment_transaction_id=transaction["investment_transaction_id"],
-                account=account,
-                security=security,
-                fees=transaction["fees"],
-                cancel_transaction_id=transaction["cancel_transaction_id"],                                
-                type=transaction_type,
+                defaults={
+                    "date": transaction["date"],
+                    "name": transaction["name"],
+                    "quantity": transaction["quantity"],
+                    "amount": transaction["amount"],
+                    "price": transaction["price"],
+                    "account": account,
+                    "security": security,
+                    "fees": transaction["fees"],
+                    "cancel_transaction_id": transaction["cancel_transaction_id"],
+                    "type": transaction_type,
+                },
             )
-            new_transactions.append(new_transaction)
-            new_transaction.save()
+            
+            if created:
+                new_transaction.save()
+            new_transactions.append(new_transaction)            
 
     return new_transactions            
 
@@ -316,4 +321,29 @@ def update_transactions(request):
         new_investment_transactions = _update_investments(client)
         return render(request, 'transactions.html', {'transactions': new_transactions, 'investment_transactions': new_investment_transactions})        
 
-# Create your views here.
+def transaction_filter(request):
+    form = TransactionFilterForm(request.POST or None)
+    transactions = PlaidTransaction.objects.none()  # Empty QuerySet
+
+    if form.is_valid():
+        account = form.cleaned_data['account']
+        start_date = form.cleaned_data['start_date']
+        end_date = form.cleaned_data['end_date']
+
+        transactions = PlaidTransaction.objects.filter(account=account)
+
+        if start_date:
+            transactions = transactions.filter(date__gte=start_date)
+        if end_date:
+            transactions = transactions.filter(date__lte=end_date)
+
+    return render(request, 'transaction_filter.html', {'form': form, 'transactions': transactions})
+
+def output_beancount(request):
+    # Take in a list of transactions from the form and output them in beancount format    
+    transaction_ids = request.POST.getlist('transactions')        
+    transactions = PlaidTransaction.objects.filter(id__in=transaction_ids)    
+    renderer = BeancountRenderer(transactions)
+    output = [ renderer._printer(transaction) for transaction in renderer.transactions ]    
+    print(output)
+    return render(request, 'output_beancount.html', {'transactions': output})
