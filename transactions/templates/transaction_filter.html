@@ -17,6 +17,16 @@
         <li>No transactions found.</li>
     {% endfor %}
     </ul>
+    <ul>
+    {% for transaction in investment_transactions %}
+        <li>
+            <input type="checkbox" class="transaction-checkbox" name="investment-transactions" value="{{ transaction.id }}">
+            {{ transaction.date }}: {{ transaction.security }} {{ transaction.quantity }} {{ transaction.amount }}
+        </li>
+    {% empty %}
+        <li>No transactions found.</li>
+    {% endfor %}
+    </ul>
     <input type="submit" value="Output in Beancount Format">
 </form>
 
