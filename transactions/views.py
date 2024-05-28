@@ -324,6 +324,7 @@ def update_transactions(request):
 def transaction_filter(request):
     form = TransactionFilterForm(request.POST or None)
     transactions = PlaidTransaction.objects.none()  # Empty QuerySet
+    investment_transactions = PlaidInvestmentTransaction.objects.none()  # Empty QuerySet
 
     if form.is_valid():
         account = form.cleaned_data['account']
@@ -331,19 +332,24 @@ def transaction_filter(request):
         end_date = form.cleaned_data['end_date']
 
         transactions = PlaidTransaction.objects.filter(account=account)
+        investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account)
 
         if start_date:
             transactions = transactions.filter(date__gte=start_date)
+            investment_transactions = investment_transactions.filter(date__gte=start_date)
         if end_date:
             transactions = transactions.filter(date__lte=end_date)
+            investment_transactions = investment_transactions.filter(date__lte=end_date)
 
-    return render(request, 'transaction_filter.html', {'form': form, 'transactions': transactions})
+    return render(request, 'transaction_filter.html', {'form': form, 'transactions': transactions, 'investment_transactions': investment_transactions})
 
 def output_beancount(request):
     # Take in a list of transactions from the form and output them in beancount format    
     transaction_ids = request.POST.getlist('transactions')        
-    transactions = PlaidTransaction.objects.filter(id__in=transaction_ids)    
-    renderer = BeancountRenderer(transactions)
-    output = [ renderer._printer(transaction) for transaction in renderer.transactions ]    
-    print(output)
+    investment_transaction_ids = request.POST.getlist('investment-transactions')        
+    transactions = PlaidTransaction.objects.filter(id__in=transaction_ids)
+    investment_transactions = PlaidInvestmentTransaction.objects.filter(id__in=investment_transaction_ids).order_by('date')
+    print(investment_transactions)
+    renderer = BeancountRenderer(transactions, investment_transactions)    
+    output = [ renderer._printer(transaction) for transaction in renderer.transactions + renderer.investment_transactions ]    
     return render(request, 'output_beancount.html', {'transactions': output})
