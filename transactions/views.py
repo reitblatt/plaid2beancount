@@ -163,21 +163,24 @@ def _update_transactions(client: plaid_api.PlaidApi):
                 updated_accounts.add(account)
                 if created:
                     account.save()
-                new_transaction = PlaidTransaction(
-                    date=transaction["date"],
-                    datetime=transaction["datetime"],
-                    authorized_date=transaction["authorized_date"],
-                    authorized_datetime=transaction["authorized_datetime"],
-                    name=transaction["name"],
-                    merchant_name=transaction["merchant_name"],
-                    website=transaction["website"],
-                    amount=transaction["amount"],
-                    check_number=transaction["check_number"],
+                    
+                new_transaction, created = PlaidTransaction.objects.get_or_create(
                     transaction_id=transaction["transaction_id"],
-                    account=account,
-                    personal_finance_category=category,
-                    personal_finance_confidence=confidence,
-                    pending=transaction["pending"],
+                    defaults={
+                        "date": transaction["date"],
+                        "datetime": transaction["datetime"],
+                        "authorized_date": transaction["authorized_date"],
+                        "authorized_datetime": transaction["authorized_datetime"],
+                        "name": transaction["name"],
+                        "merchant_name": transaction["merchant_name"],
+                        "website": transaction["website"],
+                        "amount": transaction["amount"],
+                        "check_number": transaction["check_number"],                    
+                        "account": account,
+                        "personal_finance_category": category,
+                        "personal_finance_confidence": confidence,
+                        "pending": transaction["pending"],
+                    }
                 )
                 new_transactions.append(new_transaction)
                 new_transaction.save()
