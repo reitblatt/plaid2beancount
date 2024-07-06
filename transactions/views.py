@@ -135,6 +135,9 @@ def _update_transactions(client: plaid_api.PlaidApi):
 
             for transaction in transactions:
                 print(transaction)
+                if transaction["pending"]:
+                    print('skipping pending transaction')
+                    
                 if transaction["personal_finance_category"] is not None:
                     category, created = FinanceCategory.objects.get_or_create(
                         detailed=transaction["personal_finance_category"]["detailed"],

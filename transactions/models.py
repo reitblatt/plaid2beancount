@@ -68,6 +68,9 @@ class PlaidTransaction(models.Model):
     personal_finance_confidence = models.CharField(max_length=10, choices=CONFIDENCE_CHOICES, default='UNKNOWN')
     pending = models.BooleanField()
     
+    def __str__(self) -> str:
+        return f'{self.name} - {self.merchant_name} - {self.date} - {self.amount}'
+    
 class PlaidSecurity(models.Model):
     security_id = models.CharField(max_length=255, unique=True)
     name = models.CharField(max_length=255)
