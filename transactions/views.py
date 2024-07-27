@@ -331,6 +331,7 @@ def transaction_filter(request):
     form = TransactionFilterForm(request.POST or None)
     transactions = PlaidTransaction.objects.none()  # Empty QuerySet
     investment_transactions = PlaidInvestmentTransaction.objects.none()  # Empty QuerySet
+    investment_transactions = PlaidInvestmentTransaction.objects.none()  # Empty QuerySet
 
     if form.is_valid():
         account = form.cleaned_data['account']
@@ -339,14 +340,18 @@ def transaction_filter(request):
 
         transactions = PlaidTransaction.objects.filter(account=account)
         investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account)
+        investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account)
 
         if start_date:
             transactions = transactions.filter(date__gte=start_date)
             investment_transactions = investment_transactions.filter(date__gte=start_date)
+            investment_transactions = investment_transactions.filter(date__gte=start_date)
         if end_date:
             transactions = transactions.filter(date__lte=end_date)
             investment_transactions = investment_transactions.filter(date__lte=end_date)
+            investment_transactions = investment_transactions.filter(date__lte=end_date)
 
+    return render(request, 'transaction_filter.html', {'form': form, 'transactions': transactions, 'investment_transactions': investment_transactions})
     return render(request, 'transaction_filter.html', {'form': form, 'transactions': transactions, 'investment_transactions': investment_transactions})
 
 def output_beancount(request):
