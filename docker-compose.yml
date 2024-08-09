@@ -8,6 +8,27 @@ services:
       - .:/app
     ports:
       - "8000:8000"    
+    depends_on:      
+      - redis
+
+  celery:
+    build: .
+    command: celery -A plaid2beancount worker --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+
+  celery-beat:
+    build: .
+    command: celery -A plaid2beancount beat --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:      
+      - redis
+
+  redis:
+    image: redis:latest
 
 volumes:
   web:
