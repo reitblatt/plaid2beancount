@@ -25,7 +25,7 @@ SECRET_KEY = "django-insecure-)kjpr&=*7k(jl#$azrxc7n8lscfiv8$uzgkr2s!7bxwq%lz2%+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["127.0.0.1",]
+ALLOWED_HOSTS = ["127.0.0.1", "*"]
 
 
 # Application definition
@@ -134,7 +134,7 @@ CELERY_TIMEZONE = 'UTC'
 from celery.schedules import crontab
 
 CELERY_BEAT_SCHEDULE = {
-    'fetch-data-every-hour': {
+    'fetch-data-every-day': {
         'task': 'transactions.tasks.fetch_data',
         'schedule': crontab(minute=0, hour=0, day_of_week='*'),  # Every day
     },
