@@ -99,7 +99,7 @@ def load_configuration(request):
 @csrf_exempt
 def update_transactions(request):
     if request.method == 'POST':
-        config = _load_config_file()
+        config = load_config_file()
         # Get the Plaid configuration from the TOML file
         client_id = config["PLAID"]["client_id"]
         secret = config["PLAID"]["secret"]
