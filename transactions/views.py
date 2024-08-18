@@ -14,10 +14,44 @@ from .config import load_config_file
 def starting_page(request):
     return render(request, 'starting_page.html')
 
+
+"""
+The plaid configuration assumes that the beancount accounts are structured so that all of the 
+asset accounts at a given institution are under a parent account with the institution's name. 
+For example, if you have a bank account at Foo Bank, the accounts would be structured like this:
+
+Assets:Foo-Bank
+Assets:Foo-Bank:Checking
+
+Etc
+
+We store the plaid login info (i.e. 'item_id' and 'access_token') under the parent (institution) account, 
+and the per-account info (i.e. 'account_id') under the child account, like so:
+open 2000-01-01 Assets:Foo-Bank
+  access_token: "production-..."
+  plaid_item_id: "..."
+  
+open 2000-01-01 Assets:Foo-Bank:Checking
+    plaid_account_id: "..."
+"""
 def _load_beancount_accounts(file_path):
     entries, _, _= loader.load_file(file_path)
     # We want to pull out just the accounts and metadat
     accounts = [entry for entry in entries if isinstance(entry, core.data.Open)]
+    
+    items = {
+        account.account: account
+        for account in accounts
+        if "plaid_item_id" in account.meta and "plaid_access_token" in account.meta
+    }
+    
+    plaid_accounts = [
+        (account, items[core.account.parent(account.account)].meta['plaid_item_id'], items[core.account.parent(account.account)].meta['plaid_access_token'])
+        for account in accounts
+        if "plaid_account_id" in account.meta                
+    ]        
+    
+    # print(plaid_accounts)
 
     short_names = {
         account.meta["short_name"]: account.account
@@ -30,7 +64,7 @@ def _load_beancount_accounts(file_path):
         if "plaid_category" in account.meta
     }
     # convert accounts to a dict from plaid_id to account
-    return short_names, expense_accounts
+    return short_names, expense_accounts, plaid_accounts
     
 @csrf_exempt
 def load_configuration(request):
@@ -42,7 +76,7 @@ def load_configuration(request):
         del config["BEANCOUNT"]
 
         # Load the beancount file
-        bc_accounts, expense_accounts = _load_beancount_accounts(root_file)
+        _, expense_accounts, plaid_accounts = _load_beancount_accounts(root_file)
 
         # update expense accounts with the new accounts
         for category in FinanceCategory.objects.all():
@@ -56,10 +90,8 @@ def load_configuration(request):
         # Remove the Plaid configuration from the TOML file
         del config["PLAID"]
 
-        for account_name in config.sections():
-            access_token = config[account_name]["access_token"]
-            item_id = config[account_name]["item_id"]
-            account_id = config[account_name]["account"]
+        for account, item_id, access_token in plaid_accounts:            
+            account_id = account.meta['plaid_account_id']
 
             # First, check if the parent item (institution) exists
             item, created = PlaidItem.objects.get_or_create(
@@ -71,26 +103,23 @@ def load_configuration(request):
 
             if created:
                 item.save()
-
-            if account_name in bc_accounts:
-                beancount_account = bc_accounts[account_name]
-            else:
-                beancount_account = None
-            account, created = Account.objects.get_or_create(
+            
+            django_account, created = Account.objects.get_or_create(
                 plaid_id=account_id,
                 defaults={
-                    "name": account_name,
+                    "name": account.meta["short_name"],
                     "item": item,
-                    "beancount_name": beancount_account,
+                    "beancount_name": account.account,
                 },
             )
             if created:
-                account.save()
+                django_account.save()
             else:
                 # update the account name if it's changed
-                if account.beancount_name != beancount_account:
-                    account.beancount_name = beancount_account
-                    account.save()
+                if django_account.beancount_name != account.account:
+                    django_account.beancount_name = account.account
+                    django_account.save()
+            print(django_account)
         accounts = Account.objects.all()
         return render(request, 'accounts.html', {'accounts': accounts})
     
