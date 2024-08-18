@@ -131,21 +131,17 @@ def transaction_filter(request):
         start_date = form.cleaned_data['start_date']
         end_date = form.cleaned_data['end_date']
 
-        transactions = PlaidTransaction.objects.filter(account=account)
-        investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account)
-        investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account)
+        transactions = PlaidTransaction.objects.filter(account=account).filter(pending=False)
+        investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account).filter(pending=False)        
 
         if start_date:
             transactions = transactions.filter(date__gte=start_date)
-            investment_transactions = investment_transactions.filter(date__gte=start_date)
-            investment_transactions = investment_transactions.filter(date__gte=start_date)
+            investment_transactions = investment_transactions.filter(date__gte=start_date)            
         if end_date:
             transactions = transactions.filter(date__lte=end_date)
-            investment_transactions = investment_transactions.filter(date__lte=end_date)
-            investment_transactions = investment_transactions.filter(date__lte=end_date)
+            investment_transactions = investment_transactions.filter(date__lte=end_date)            
 
-    return render(request, 'transaction_filter.html', {'form': form, 'transactions': transactions, 'investment_transactions': investment_transactions})
-    return render(request, 'transaction_filter.html', {'form': form, 'transactions': transactions, 'investment_transactions': investment_transactions})
+    return render(request, 'transaction_filter.html', {'form': form, 'transactions': transactions, 'investment_transactions': investment_transactions})    
 
 def output_beancount(request):
     # Take in a list of transactions from the form and output them in beancount format    
