@@ -161,7 +161,7 @@ def transaction_filter(request):
         end_date = form.cleaned_data['end_date']
 
         transactions = PlaidTransaction.objects.filter(account=account).filter(pending=False)
-        investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account).filter(pending=False)        
+        investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account)
 
         if start_date:
             transactions = transactions.filter(date__gte=start_date)
