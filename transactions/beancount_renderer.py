@@ -23,8 +23,8 @@ class BeancountRenderer:
             expense_account = transaction.personal_finance_category.expense_account
         else:
             expense_account = (
-                "Unknown: " + transaction.personal_finance_category.detailed
-            )
+                "Expenses:Unknown"
+            )            
 
         if transaction.account.beancount_name is not None:
             account = transaction.account.beancount_name
@@ -32,7 +32,7 @@ class BeancountRenderer:
             account = "Unknown"
 
         return Transaction(
-            meta={"plaid_transaction_id": transaction.transaction_id},
+            meta={"plaid_transaction_id": transaction.transaction_id, "plaid_category_detailed" : transaction.personal_finance_category.detailed},
             date=transaction.date,
             payee=transaction.merchant_name,
             narration=transaction.name,
