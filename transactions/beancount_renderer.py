@@ -119,6 +119,35 @@ class BeancountRenderer:
                 sink_posting = Posting(
                     "Assets:Transfer", Amount(transaction.amount, "USD"), None, None, None, None
                 )
+            elif transaction.type.subtype == 'dividend':
+                source_posting = Posting(
+                    account.replace("Assets", "Income") + ":Dividends:" + ticker, Amount(transaction.amount, "USD"), None, None, None, None
+                )
+                sink_posting = Posting(
+                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                )
+        elif transaction.type.type == 'transfer':
+            # At some point Vanguard started using the transfer type for sweep in/out...
+            if transaction.type.subtype == 'transfer':
+                if transaction.name == 'Sweep in':
+                    source_posting = Posting(
+                        account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                    )
+                    # For some reason, this is not being recorded as a quantity
+                    quantity = transaction.quantity or transaction.amount
+                    price = transaction.price or Decimal('1.0')
+                                                        
+                    sink_posting = Posting(
+                        account + ":" + ticker, Amount(quantity, ticker), None, Amount(price, "USD"), None, None
+                    )
+                elif transaction.name == 'Sweep out':
+                    source_posting = Posting(
+                        account + ":" + ticker, Amount(transaction.amount, ticker), None, Amount(transaction.price, "USD"), None, None
+                    )
+                    sink_posting = Posting(
+                        account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None    
+                    )                   
+                    
         if source_posting is None or sink_posting is None:
             print(transaction)
             raise ValueError(f"Unknown transaction type: {transaction.type.type} - {transaction.type.subtype}")
