@@ -33,6 +33,7 @@ class Account(models.Model):
     name = models.CharField(max_length=255, null=True, default=None)
     beancount_name = models.CharField(max_length=255, null=True, default=None)
     plaid_id = models.CharField(max_length=255, unique=True)
+    transaction_file = models.CharField(max_length=255, null=True, default=None)
     item = models.ForeignKey(PlaidItem, on_delete=models.CASCADE, related_name='accounts')
     type = models.CharField(max_length=255, choices=ACCOUNT_TYPES)
     last_updated = models.DateTimeField(null=True, default=None)

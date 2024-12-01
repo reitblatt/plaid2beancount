@@ -33,6 +33,13 @@ open 2000-01-01 Assets:Foo-Bank
   
 open 2000-01-01 Assets:Foo-Bank:Checking
     plaid_account_id: "..."
+    
+By default, transactions for each account are stored under accounts/Instutition/Account-Name.beancount
+
+E.g.:
+Assets:Ally:Savings
+
+accounts/Ally/Savings.beancount
 """
 def _load_beancount_accounts(file_path):
     entries, _, _= loader.load_file(file_path)
@@ -65,7 +72,24 @@ def _load_beancount_accounts(file_path):
     }
     # convert accounts to a dict from plaid_id to account
     return short_names, expense_accounts, plaid_accounts
-    
+
+def _calculate_filename_from_account(account: str):    
+    account_parts = account.split(':')
+    file_name = None
+    if account_parts[0] == 'Assets':
+        if len(account_parts) >= 3:
+            file_name = f"accounts/{account_parts[1]}/{account_parts[2]}.beancount"
+        else:
+            print(f"Account {account} is not structured correctly")
+    elif account_parts[0] == 'Liabilities':
+        if account_parts[1] == 'Credit-Card' and len(account_parts) >= 4:            
+            file_name = f"accounts/{account_parts[2]}/{account_parts[3]}.beancount"
+        elif len(account_parts) >= 3:
+            file_name = f"accounts/{account_parts[1]}/{account_parts[2]}.beancount"
+        else:
+            print(f"Account {account} is not structured correctly")
+    return file_name
+
 @csrf_exempt
 def load_configuration(request):
     if request.method == 'POST':
@@ -103,6 +127,8 @@ def load_configuration(request):
 
             if created:
                 item.save()
+            # Split the account name into the institution and the account
+            file_name = _calculate_filename_from_account(account.account)
             
             django_account, created = Account.objects.get_or_create(
                 plaid_id=account_id,
@@ -110,6 +136,7 @@ def load_configuration(request):
                     "name": account.meta["short_name"],
                     "item": item,
                     "beancount_name": account.account,
+                    "transaction_file": file_name,
                 },
             )
             if created:
@@ -119,7 +146,11 @@ def load_configuration(request):
                 if django_account.beancount_name != account.account:
                     django_account.beancount_name = account.account
                     django_account.save()
+                if django_account.transaction_file != file_name:
+                    django_account.transaction_file = file_name
+                    django_account.save()
             print(django_account)
+            print(file_name)
         accounts = Account.objects.all()
         return render(request, 'accounts.html', {'accounts': accounts})
     
