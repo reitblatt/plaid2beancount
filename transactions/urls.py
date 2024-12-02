@@ -7,4 +7,5 @@ urlpatterns = [
     path("update_transactions/", views.update_transactions, name="update_transactions"),
     path('transaction_filter/', views.transaction_filter, name='transaction_filter'),
     path('output_beancount/', views.output_beancount, name='output_beancount'),
+    path('update_beancount/', views.update_beancount, name='update_beancount'),
 ]

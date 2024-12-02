@@ -73,6 +73,23 @@ def _load_beancount_accounts(file_path):
     # convert accounts to a dict from plaid_id to account
     return short_names, expense_accounts, plaid_accounts
 
+def _load_beancount_entries():
+    config = load_config_file()        
+    root_file = config["BEANCOUNT"]["root_file"]
+
+    # Load the beancount file
+    entries, _, _= loader.load_file(root_file)
+        
+    return entries
+
+def _get_beancount_accounts_directory():
+    config = load_config_file()        
+    root_file = config["BEANCOUNT"]["root_file"]
+    import os
+    root_file = os.path.expanduser(root_file)
+    # abs_file_path = os.path.abspath(root_file)
+    return os.path.dirname(root_file)
+    
 def _calculate_filename_from_account(account: str):    
     account_parts = account.split(':')
     file_name = None
@@ -212,3 +229,32 @@ def output_beancount(request):
     renderer = BeancountRenderer(transactions, investment_transactions)    
     output = [ renderer._printer(transaction) for transaction in renderer.transactions + renderer.investment_transactions ]    
     return render(request, 'output_beancount.html', {'transactions': output})
+
+def update_beancount(request):
+    # For each account, look up the most recent transaction with a plaid_transaction_id, 
+    # and output all transactions since then    
+    accounts = Account.objects.filter(transaction_file__isnull=False)
+    entries = _load_beancount_entries()
+    import os
+    print(_get_beancount_accounts_directory())
+    os.chdir(_get_beancount_accounts_directory())    
+    for account in accounts:        
+        file_name = account.transaction_file                
+        filtered_entries = [
+            entry for entry in entries 
+            if isinstance(entry, core.data.Transaction) and                 
+                "plaid_transaction_id" in entry.meta and
+                any(posting.account == account.beancount_name for posting in entry.postings)
+            ]
+        if not filtered_entries:
+            print(f"No transactions found for {account}")
+            continue
+        most_recent_transaction = max(filtered_entries, key=lambda x: x.date)
+        transactions = PlaidTransaction.objects.filter(account=account).filter(date__gt=most_recent_transaction.date).order_by('date')
+        investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account).filter(date__gt=most_recent_transaction.date).order_by('date')
+        renderer = BeancountRenderer(transactions, investment_transactions)
+        output = [ renderer._printer(transaction) for transaction in renderer.transactions + renderer.investment_transactions ] 
+        with open(file_name, 'a') as f:
+            f.writelines(output)                    
+    
+    return render(request, 'output_beancount.html', {'transactions': []})

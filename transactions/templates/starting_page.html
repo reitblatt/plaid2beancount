@@ -13,6 +13,10 @@
       {% csrf_token %}
       <input type="submit" value="Pull new transactions" />
     </form>
+    <form action="update_beancount/" method="post">
+      {% csrf_token %}
+      <input type="submit" value="Update Beancount files" />
+    </form>
     <a href="{% url 'transaction_filter' %}">View transactions</a>    
   </body>
 </html>
