@@ -236,7 +236,7 @@ def update_beancount(request):
     accounts = Account.objects.filter(transaction_file__isnull=False)
     entries = _load_beancount_entries()
     import os
-    print(_get_beancount_accounts_directory())
+    
     os.chdir(_get_beancount_accounts_directory())    
     for account in accounts:        
         file_name = account.transaction_file                
@@ -250,7 +250,7 @@ def update_beancount(request):
             print(f"No transactions found for {account}")
             continue
         most_recent_transaction = max(filtered_entries, key=lambda x: x.date)
-        transactions = PlaidTransaction.objects.filter(account=account).filter(date__gt=most_recent_transaction.date).order_by('date')
+        transactions = PlaidTransaction.objects.filter(account=account).filter(pending=False).filter(date__gt=most_recent_transaction.date).order_by('date')
         investment_transactions = PlaidInvestmentTransaction.objects.filter(account=account).filter(date__gt=most_recent_transaction.date).order_by('date')
         renderer = BeancountRenderer(transactions, investment_transactions)
         output = [ renderer._printer(transaction) for transaction in renderer.transactions + renderer.investment_transactions ] 
