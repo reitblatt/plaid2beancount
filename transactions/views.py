@@ -240,11 +240,12 @@ def update_beancount(request):
     os.chdir(_get_beancount_accounts_directory())    
     for account in accounts:        
         file_name = account.transaction_file                
+        account_matcher = core.account.parent_matcher(account.beancount_name)
         filtered_entries = [
             entry for entry in entries 
             if isinstance(entry, core.data.Transaction) and                 
                 "plaid_transaction_id" in entry.meta and
-                any(posting.account == account.beancount_name for posting in entry.postings)
+                any(account_matcher(posting.account) for posting in entry.postings)
             ]
         if not filtered_entries:
             print(f"No transactions found for {account}")
