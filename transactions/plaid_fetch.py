@@ -58,7 +58,7 @@ def fetch_investments(client: plaid_api.PlaidApi, start_date=None, end_date=None
             investment_transactions.extend(response["transactions"])
 
         for transaction in investment_transactions:
-            print(transaction)
+            # print(transaction)
             account, created = Account.objects.get_or_create(
                 plaid_id=transaction["account_id"],
                 defaults={
@@ -121,84 +121,93 @@ def fetch_transactions(client: plaid_api.PlaidApi):
     new_transactions = []
     updated_accounts = set()
     for item in PlaidItem.objects.all():
+        print("About to update transactions for item {0}".format(item.item_id))
         access_token = item.access_token
         cursor = item.cursor
         if cursor is None:
             cursor = ""
         has_more = True
+        try:
+            while has_more:
+                request = TransactionsSyncRequest(
+                    access_token=access_token,
+                    cursor=cursor,
+                    count=100,
+                )
 
-        while has_more:
-            request = TransactionsSyncRequest(
-                access_token=access_token,
-                cursor=cursor,
-                count=100,
-            )
+                response = client.transactions_sync(request)
+                transactions = response["added"]
+                has_more = response["has_more"]
+                # Update cursor to the next cursor
+                cursor = response["next_cursor"]
 
-            response = client.transactions_sync(request)
-            transactions = response["added"]
-            has_more = response["has_more"]
-            # Update cursor to the next cursor
-            cursor = response["next_cursor"]
+                for transaction in transactions:
+                    #print(transaction)                
+                        
+                    if transaction["personal_finance_category"] is not None:
+                        category, created = FinanceCategory.objects.get_or_create(
+                            detailed=transaction["personal_finance_category"]["detailed"],
+                            defaults={
+                                "primary": transaction["personal_finance_category"][
+                                    "primary"
+                                ],
+                                "description": "Unknown (Plaid added a new category!)",
+                            },
+                        )
+                        if created:
+                            # Uh oh! Plaid added a new category...
+                            category.save()
 
-            for transaction in transactions:
-                print(transaction)                
-                    
-                if transaction["personal_finance_category"] is not None:
-                    category, created = FinanceCategory.objects.get_or_create(
-                        detailed=transaction["personal_finance_category"]["detailed"],
+                        confidence = transaction["personal_finance_category"][
+                            "confidence_level"
+                        ]
+
+                    account, created = Account.objects.get_or_create(
+                        plaid_id=transaction["account_id"],
                         defaults={
-                            "primary": transaction["personal_finance_category"][
-                                "primary"
-                            ],
-                            "description": "Unknown (Plaid added a new category!)",
+                            "name": "Unknown account found during Plaid sync!",
+                            "item": item,
                         },
                     )
+                    updated_accounts.add(account)
                     if created:
-                        # Uh oh! Plaid added a new category...
-                        category.save()
+                        account.save()
+                        
+                    new_transaction, created = PlaidTransaction.objects.get_or_create(
+                        transaction_id=transaction["transaction_id"],
+                        defaults={
+                            "date": transaction["date"],
+                            "datetime": transaction["datetime"],
+                            "authorized_date": transaction["authorized_date"],
+                            "authorized_datetime": transaction["authorized_datetime"],
+                            "name": transaction["name"],
+                            "merchant_name": transaction["merchant_name"],
+                            "website": transaction["website"],
+                            "amount": transaction["amount"],
+                            "check_number": transaction["check_number"],                    
+                            "account": account,
+                            "personal_finance_category": category,
+                            "personal_finance_confidence": confidence,
+                            "pending": transaction["pending"],
+                        }
+                    )
+                    new_transactions.append(new_transaction)
+                    new_transaction.save()
 
-                    confidence = transaction["personal_finance_category"][
-                        "confidence_level"
-                    ]
-
-                account, created = Account.objects.get_or_create(
-                    plaid_id=transaction["account_id"],
-                    defaults={
-                        "name": "Unknown account found during Plaid sync!",
-                        "item": item,
-                    },
-                )
-                updated_accounts.add(account)
-                if created:
+                # Save the cursor for the next time we sync
+                item.cursor = cursor                    
+                item.save()
+                for account in updated_accounts:
+                    account.last_updated = datetime.datetime.now()
                     account.save()
-                    
-                new_transaction, created = PlaidTransaction.objects.get_or_create(
-                    transaction_id=transaction["transaction_id"],
-                    defaults={
-                        "date": transaction["date"],
-                        "datetime": transaction["datetime"],
-                        "authorized_date": transaction["authorized_date"],
-                        "authorized_datetime": transaction["authorized_datetime"],
-                        "name": transaction["name"],
-                        "merchant_name": transaction["merchant_name"],
-                        "website": transaction["website"],
-                        "amount": transaction["amount"],
-                        "check_number": transaction["check_number"],                    
-                        "account": account,
-                        "personal_finance_category": category,
-                        "personal_finance_confidence": confidence,
-                        "pending": transaction["pending"],
-                    }
+                print("No more transactions to sync for item {0}".format(item.item_id))
+        except plaid.ApiException as e:
+            print(e)
+            print(
+                "Error getting transactions for item {0}".format(
+                    item.item_id
                 )
-                new_transactions.append(new_transaction)
-                new_transaction.save()
-
-            # Save the cursor for the next time we sync
-            item.cursor = cursor                    
-            item.save()
-            for account in updated_accounts:
-                account.last_updated = datetime.datetime.now()
-                account.save()
-            print("No more transactions to sync for item {0}".format(item.item_id))
+            )
+            continue
     return new_transactions
            
