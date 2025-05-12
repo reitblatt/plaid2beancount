@@ -70,7 +70,7 @@ def _get_latest_cursor(entries: List[Directive], account: str, item_id: str) -> 
     return sorted(cursors, key=lambda x: x.date)[-1].cursor
 
 
-def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, Dict[str, str]]]:
+def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str], Dict[str, Dict[str, str]], Dict[str, str]]:
     """Load account mappings and cursors from beancount file."""
     entries, _, _ = loader.load_file(file_path)
     accounts = [entry for entry in entries if isinstance(entry, Open)]
@@ -88,6 +88,24 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
         for account in accounts
         if "plaid_category" in account.meta
     }
+    
+    # Get transaction file mappings with defaults
+    transaction_files = {}
+    for account in accounts:
+        if "plaid_account_id" in account.meta:
+            # Use explicit transaction_file if provided
+            if "transaction_file" in account.meta:
+                transaction_files[account.account] = account.meta["transaction_file"]
+            else:
+                # Generate default path based on account structure
+                account_parts = account.account.split(':')
+                if account_parts[0] == 'Liabilities' and account_parts[1] == 'Credit-Card':
+                    # For credit cards, skip the 'Credit-Card' segment
+                    file_path = f"accounts/{account_parts[2]}/{account_parts[3]}.beancount"
+                else:
+                    # For other accounts, use the first two segments after the type
+                    file_path = f"accounts/{account_parts[1]}/{account_parts[2]}.beancount"
+                transaction_files[account.account] = file_path
     
     # Get item configurations
     items = {}
@@ -108,7 +126,7 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
             if account_cursors:
                 cursors[account.account] = account_cursors
     
-    return short_names, expense_accounts, items, cursors
+    return short_names, expense_accounts, items, cursors, transaction_files
 
 
 def _get_or_create_item(item_id: str, name: str, access_token: str, cursor: Optional[str] = None) -> PlaidItem:
@@ -135,7 +153,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str) -> Tuple[Li
     """Fetch transactions from Plaid and convert them to PlaidTransaction objects."""
     transactions = []
     cursor_directives = []
-    short_names, expense_accounts, items, cursors = _load_beancount_accounts(root_file)
+    short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
     
     for item_id, access_token in items.items():
         # Get cursor from account file
@@ -187,11 +205,12 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str) -> Tuple[Li
                         )
 
                     # Create account
+                    beancount_name = short_names.get(t["account_id"], "Unknown")
                     account = Account(
                         name=t.get("account_name", "Unknown account"),
-                        beancount_name=short_names.get(t["account_id"], "Unknown"),
+                        beancount_name=beancount_name,
                         plaid_id=t["account_id"],
-                        transaction_file=f"accounts/{t['account_id']}.beancount",
+                        transaction_file=transaction_files.get(beancount_name),
                         item=_get_or_create_item(item_id, "Unknown", access_token, cursor),
                         type=accounts.get(t["account_id"], "Unknown")
                     )
@@ -242,7 +261,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str) -> Tuple[Li
 def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[PlaidInvestmentTransaction]:
     """Update investment transactions for all items."""
     # Load accounts and cursors
-    short_names, expense_accounts, items, cursors = _load_beancount_accounts(root_file)
+    short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
     
     investment_transactions = []
     for item_id, access_token in items.items():
@@ -267,11 +286,12 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
                     transaction_date = transaction_date.isoformat()
                 
                 # Create account
+                beancount_name = short_names.get(t["account_id"], "Unknown")
                 account = Account(
                     name=t.get("account_name", "Unknown account"),
-                    beancount_name=short_names.get(t["account_id"], "Unknown"),
+                    beancount_name=beancount_name,
                     plaid_id=t["account_id"],
-                    transaction_file=f"accounts/{t['account_id']}.beancount",
+                    transaction_file=transaction_files.get(beancount_name),
                     item=_get_or_create_item(item_id, "Unknown", access_token),
                     type=accounts[t["account_id"]]["type"]
                 )
@@ -339,19 +359,39 @@ def main():
         renderer = BeancountRenderer(transactions, investment_transactions)
         entries = renderer.print()
         
-        # Write transactions to file
-        transactions_file = os.path.join(os.path.dirname(args.root_file), "transactions.beancount")
-        with open(transactions_file, 'w') as f:
-            f.write('\n'.join(entries))
+        # Group transactions by account
+        account_entries = {}
+        for entry in entries:
+            # Get the first posting's account to determine which file to write to
+            if isinstance(entry, data.Transaction) and entry.postings:
+                account = entry.postings[0].account
+                # Find the corresponding Account object for this beancount account name
+                matching_account = next((t.account for t in transactions + investment_transactions 
+                                      if t.account.beancount_name == account), None)
+                if matching_account and matching_account.transaction_file:
+                    if matching_account.transaction_file not in account_entries:
+                        account_entries[matching_account.transaction_file] = []
+                    account_entries[matching_account.transaction_file].append(entry)
+        
+        # Write transactions to their respective account files
+        base_dir = os.path.dirname(os.path.abspath(args.root_file))
+        for file_path, account_transactions in account_entries.items():
+            # Ensure the full path exists
+            full_path = os.path.join(base_dir, file_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            # Write transactions to file
+            with open(full_path, 'a') as f:
+                for transaction in account_transactions:
+                    f.write(printer.format_entry(transaction) + '\n')
+            print(f"Successfully wrote {len(account_transactions)} transactions to {full_path}")
 
         # Write cursor directives to file
-        cursors_file = os.path.join(os.path.dirname(args.root_file), "plaid_cursors.beancount")
+        cursors_file = os.path.join(base_dir, "plaid_cursors.beancount")
         with open(cursors_file, 'w') as f:
             for directive in cursor_directives:
                 print(f"Writing cursor directive: {directive}")
                 f.write(printer.format_entry(directive) + '\n')
 
-        print(f"Successfully synced {len(transactions)} transactions to {transactions_file}")
         print(f"Successfully synced {len(cursor_directives)} cursors to {cursors_file}")
 
 
