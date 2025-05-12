@@ -5,6 +5,7 @@ import configparser
 import os
 import time
 from typing import Dict, List, Optional, Tuple
+import logging
 
 import plaid
 from plaid.api import plaid_api
@@ -22,6 +23,9 @@ from beancount import loader
 
 from plaid_models import PlaidTransaction, PlaidInvestmentTransaction, PlaidSecurity, PlaidInvestmentTransactionType, Account, FinanceCategory, PlaidItem, PlaidCursor
 
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 def _parse_args_and_load_config():
     defaults = {
@@ -50,6 +54,12 @@ def _parse_args_and_load_config():
         "--root-file",
         metavar="STR",
         help="Path to the root beancount file",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode to retrieve only the first batch of transactions from each account",
     )
 
     args = parser.parse_args()
@@ -149,7 +159,7 @@ def _get_or_create_category(primary: str, detailed: str, description: str, expen
     )
 
 
-def _update_transactions(client: plaid_api.PlaidApi, root_file: str) -> Tuple[List[PlaidTransaction], List[Custom]]:
+def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool = False) -> Tuple[List[PlaidTransaction], List[Custom]]:
     """Fetch transactions from Plaid and convert them to PlaidTransaction objects."""
     transactions = []
     cursor_directives = []
@@ -173,9 +183,9 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str) -> Tuple[Li
             }
         except plaid.ApiException as e:
             if e.status == 400 and "ITEM_LOGIN_REQUIRED" in str(e):
-                print(f"Item {item_id} needs reauthorization. Please use Plaid Link to update it.")
+                logger.error(f"Item {item_id} needs reauthorization. Please use Plaid Link to update it.")
             else:
-                print(f"Error getting accounts for item {item_id}: {e}")
+                logger.error(f"Error getting accounts for item {item_id}: {e}")
             continue
 
         has_more = True
@@ -193,6 +203,9 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str) -> Tuple[Li
                 cursor = response["next_cursor"]
 
                 for t in plaid_transactions:
+                    # Log transaction details when fetched from Plaid
+                    logger.debug(f"Fetched transaction from Plaid: {t['name']} - {t['amount']} for account {short_names.get(t['account_id'], 'Unknown')}")
+
                     # Create or get category
                     category = None
                     if t["personal_finance_category"] is not None:
@@ -215,6 +228,9 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str) -> Tuple[Li
                         type=accounts.get(t["account_id"], "Unknown")
                     )
 
+                    # Log transaction details
+                    logger.debug(f"Processing transaction: {t['name']} - {t['amount']} for account {beancount_name}")
+
                     # Create transaction
                     transaction = PlaidTransaction(
                         date=date.fromisoformat(str(t["date"])) if t.get("date") else None,
@@ -235,26 +251,23 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str) -> Tuple[Li
                     )
                     transactions.append(transaction)
 
-                # Create cursor directive
-                if account and cursor:
+                # Create cursor directive only when we have new transactions and a valid cursor
+                if plaid_transactions and cursor:
+                    # Only create one cursor directive per item_id
                     cursor_directive = Custom(
                         date=date.today(),
                         meta={"plaid_transaction_id": f"cursor_{date.today()}"},
                         type="plaid_cursor",
-                        values=[(account.beancount_name, cursor), (item_id, "")]
+                        values=[(account.beancount_name, "string"), (cursor, "string"), (item_id, "string")]
                     )
+                    # Remove any existing cursor directives for this item_id
+                    cursor_directives = [d for d in cursor_directives if d.values[2][0] != item_id]
                     cursor_directives.append(cursor_directive)
-
             except plaid.ApiException as e:
-                if e.status == 429:  # Rate limit
-                    retry_after = int(e.headers.get('Retry-After', 60))
-                    print(f"Rate limit hit. Waiting {retry_after} seconds...")
-                    time.sleep(retry_after)
-                    continue
-                else:
-                    print(f"Error syncing transactions for item {item_id}: {e}")
-                    break
-
+                logger.error(f"Error fetching transactions for item {item_id}: {e}")
+                continue
+            if debug:
+                break  # Only retrieve the first batch of transactions in debug mode
     return transactions, cursor_directives
 
 
@@ -331,6 +344,26 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
     return investment_transactions
 
 
+def _write_transactions_to_file(transactions: List[PlaidTransaction], file_path: str):
+    """Write transactions to the specified file."""
+    with open(file_path, 'a') as f:
+        for transaction in transactions:
+            # Log when writing transaction to file
+            logger.debug(f"Writing transaction to file: {transaction.name} - {transaction.amount} for account {transaction.account.beancount_name}")
+            f.write(f"{transaction.date} {transaction.name} {transaction.amount}\n")
+
+
+def _skip_duplicate_transactions(transactions: List[PlaidTransaction], existing_transactions: List[PlaidTransaction]) -> List[PlaidTransaction]:
+    """Skip duplicate transactions based on transaction ID."""
+    unique_transactions = []
+    for transaction in transactions:
+        if transaction.transaction_id not in [t.transaction_id for t in existing_transactions]:
+            unique_transactions.append(transaction)
+        else:
+            logger.debug(f"Skipping duplicate transaction: {transaction.name} - {transaction.amount} for account {transaction.account.beancount_name}")
+    return unique_transactions
+
+
 def main():
     args = _parse_args_and_load_config()
 
@@ -351,19 +384,21 @@ def main():
 
     if args.sync_transactions:
         # Fetch transactions
-        transactions, cursor_directives = _update_transactions(client, args.root_file)
+        transactions, cursor_directives = _update_transactions(client, args.root_file, args.debug)
         investment_transactions = _update_investments(client, args.root_file)
         
         # Generate Beancount entries
         from transactions.beancount_renderer import BeancountRenderer
         renderer = BeancountRenderer(transactions, investment_transactions)
-        entries = renderer.print()
-        
+        entries = [renderer._to_beancount(transaction) for transaction in transactions] + [renderer._to_investment_beancount(transaction) for transaction in investment_transactions]
+        print(f"Generated {len(entries)} entries")
+                
         # Group transactions by account
         account_entries = {}
         for entry in entries:
             # Get the first posting's account to determine which file to write to
             if isinstance(entry, data.Transaction) and entry.postings:
+                print(f"Processing entry: {entry}")
                 account = entry.postings[0].account
                 # Find the corresponding Account object for this beancount account name
                 matching_account = next((t.account for t in transactions + investment_transactions 
@@ -372,27 +407,83 @@ def main():
                     if matching_account.transaction_file not in account_entries:
                         account_entries[matching_account.transaction_file] = []
                     account_entries[matching_account.transaction_file].append(entry)
+            else:
+                print(f"Skipping entry: {entry}")
+                print(f"Entry type: {type(entry)}")
+                print(f"Entry postings: {entry.postings}")
         
         # Write transactions to their respective account files
         base_dir = os.path.dirname(os.path.abspath(args.root_file))
         for file_path, account_transactions in account_entries.items():
+            print(f"Looking for transactions to write for {file_path}")
             # Ensure the full path exists
             full_path = os.path.join(base_dir, file_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
-            # Write transactions to file
-            with open(full_path, 'a') as f:
+            
+            # Find the newest transaction date and collect existing transaction IDs
+            newest_date = None
+            existing_transaction_ids = set()
+            if os.path.exists(full_path):
+                entries, errors, options = loader.load_file(full_path)
+                if errors:
+                    print(f"Warning: Errors loading {full_path}: {errors}")
+                
+                # Find the newest transaction and collect all transaction IDs
+                for entry in entries:
+                    if isinstance(entry, data.Transaction) and entry.meta and 'plaid_transaction_id' in entry.meta:
+                        if newest_date is None or entry.date > newest_date:
+                            newest_date = entry.date
+                        existing_transaction_ids.add(entry.meta['plaid_transaction_id'])
+            
+            # Filter transactions to only include those newer than the newest existing transaction
+            # and not already in the file
+            new_transactions = []
+            if newest_date is None:
+                new_transactions = account_transactions
+            else:
                 for transaction in account_transactions:
-                    f.write(printer.format_entry(transaction) + '\n')
-            print(f"Successfully wrote {len(account_transactions)} transactions to {full_path}")
+                    if (transaction.date > newest_date and 
+                        transaction.meta.get('plaid_transaction_id') not in existing_transaction_ids):
+                        new_transactions.append(transaction)
+            
+            # Write new transactions to file
+            if new_transactions:
+                # Sort transactions by date in ascending order
+                new_transactions.sort(key=lambda x: x.date)
+                with open(full_path, 'a') as f:
+                    for transaction in new_transactions:
+                        f.write(printer.format_entry(transaction) + '\n')
+                print(f"Successfully wrote {len(new_transactions)} transactions to {full_path}")
 
         # Write cursor directives to file
         cursors_file = os.path.join(base_dir, "plaid_cursors.beancount")
         with open(cursors_file, 'w') as f:
+            # Group cursor directives by account
+            account_cursors = {}
             for directive in cursor_directives:
+                account = directive.values[0][0]
+                if account not in account_cursors or directive.date > account_cursors[account].date:
+                    account_cursors[account] = directive
+
+            # Store cursors for investment transactions
+            for transaction in investment_transactions:
+                cursor_directive = Custom(
+                    date=date.today(),
+                    meta={"plaid_transaction_id": f"cursor_{date.today()}"},
+                    type="plaid_cursor",
+                    values=[(transaction.account.beancount_name, "string"), (transaction.investment_transaction_id, "string"), (transaction.account.item.item_id, "string")]
+                )
+                # Update account cursors with investment transaction cursors
+                account = transaction.account.beancount_name
+                if account not in account_cursors or cursor_directive.date > account_cursors[account].date:
+                    account_cursors[account] = cursor_directive
+
+            # Write only the latest cursor for each account
+            for directive in account_cursors.values():
                 print(f"Writing cursor directive: {directive}")
                 f.write(printer.format_entry(directive) + '\n')
 
-        print(f"Successfully synced {len(cursor_directives)} cursors to {cursors_file}")
+        print(f"Successfully synced {len(account_cursors)} cursors to {cursors_file}")
 
 
 if __name__ == "__main__":
