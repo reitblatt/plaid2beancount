@@ -93,11 +93,14 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
     }
     
     # Get expense account mappings
-    expense_accounts = {
-        account.meta["plaid_category"]: account.account
-        for account in accounts
-        if "plaid_category" in account.meta
-    }
+    expense_accounts = {}
+    for account in accounts:
+        if "plaid_category" in account.meta:
+            expense_accounts[account.meta["plaid_category"]] = account.account
+        if "payees" in account.meta:
+            payees = account.meta["payees"].split(",")
+            for payee in payees:
+                expense_accounts[payee.strip()] = account.account
     
     # Get transaction file mappings with defaults
     transaction_files = {}
