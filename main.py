@@ -45,6 +45,25 @@ def _parse_args_and_load_config():
     )
 
     parser.add_argument(
+        "--recategorize",
+        "-r",
+        action="store_true",
+        help="re-categorize existing transactions based on current categorization rules",
+    )
+
+    parser.add_argument(
+        "--start-date",
+        metavar="YYYY-MM-DD",
+        help="Start date for recategorization (format: YYYY-MM-DD)",
+    )
+
+    parser.add_argument(
+        "--end-date",
+        metavar="YYYY-MM-DD",
+        help="End date for recategorization (format: YYYY-MM-DD)",
+    )
+
+    parser.add_argument(
         "--config-file",
         metavar="STR",
         help="Path to the config file (default: ~/.config/plaid2text/config)",
@@ -100,30 +119,28 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
         if "payees" in account.meta:
             payees = account.meta["payees"].split(",")
             for payee in payees:
-                expense_accounts[payee.strip()] = account.account
+                expense_accounts[payee.strip().lower()] = account.account
     
     # Get transaction file mappings with defaults
     transaction_files = {}
     for account in accounts:
-        if "plaid_account_id" in account.meta:
-            # Use explicit transaction_file if provided
-            if "transaction_file" in account.meta:
-                transaction_files[account.account] = account.meta["transaction_file"]
+        if "transaction_file" in account.meta:
+            transaction_files[account.account] = account.meta["transaction_file"]
+        elif "plaid_account_id" in account.meta:
+            # Generate default path based on account structure
+            account_parts = account.account.split(':')
+            if account_parts[0] == 'Liabilities' and account_parts[1] == 'Credit-Card':
+                # For credit cards, skip the 'Credit-Card' segment
+                file_path = f"accounts/{account_parts[2]}/{account_parts[3]}.beancount"
             else:
-                # Generate default path based on account structure
-                account_parts = account.account.split(':')
-                if account_parts[0] == 'Liabilities' and account_parts[1] == 'Credit-Card':
-                    # For credit cards, skip the 'Credit-Card' segment
-                    file_path = f"accounts/{account_parts[2]}/{account_parts[3]}.beancount"
-                else:
-                    # For other accounts, use the first two segments after the type
-                    file_path = f"accounts/{account_parts[1]}/{account_parts[2]}.beancount"
-                transaction_files[account.account] = file_path
+                # For other accounts, use the first two segments after the type
+                file_path = f"accounts/{account_parts[1]}/{account_parts[2]}.beancount"
+            transaction_files[account.account] = file_path
     
     # Get item configurations
     items = {}
     for account in accounts:
-        if "plaid_item_id" in account.meta:
+        if "plaid_item_id" in account.meta and "plaid_access_token" in account.meta:
             item_id = account.meta["plaid_item_id"]
             access_token = account.meta["plaid_access_token"]
             items[item_id] = access_token
@@ -367,6 +384,122 @@ def _skip_duplicate_transactions(transactions: List[PlaidTransaction], existing_
     return unique_transactions
 
 
+def _recategorize_transactions(root_file: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> int:
+    """Re-categorize existing transactions based on current categorization rules."""
+    # Load current categorization rules
+    short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
+    
+    # Parse date filters
+    start_dt = None
+    end_dt = None
+    if start_date:
+        start_dt = date.fromisoformat(start_date)
+    if end_date:
+        end_dt = date.fromisoformat(end_date)
+    
+    recategorized_count = 0
+    
+    # Process each transaction file
+    base_dir = os.path.dirname(os.path.abspath(root_file))
+    print(f"DEBUG: transaction_files = {transaction_files}")
+    for file_path in transaction_files.values():
+        full_path = os.path.join(base_dir, file_path)
+        print(f"DEBUG: About to process file: {full_path}")
+        if not os.path.exists(full_path):
+            continue
+            
+        logger.info(f"Processing file: {full_path}")
+        
+        # Load existing transactions
+        entries, errors, options = loader.load_file(full_path)
+        if errors:
+            logger.warning(f"Errors loading {full_path}: {errors}")
+            # Continue processing even with validation errors for recategorization
+            # logger.warning(f"Errors loading {full_path}: {errors}")
+            # continue
+        
+        # Filter transactions by date if specified
+        transactions_to_process = []
+        for entry in entries:
+            if isinstance(entry, data.Transaction):
+                if start_dt and entry.date < start_dt:
+                    continue
+                if end_dt and entry.date > end_dt:
+                    continue
+                transactions_to_process.append(entry)
+        
+        # Process each transaction
+        modified_entries = []
+        for entry in entries:
+            if isinstance(entry, data.Transaction) and entry in transactions_to_process:
+                # Get the payee name for categorization
+                payee = (entry.payee or entry.narration)
+                payee_lc = payee.lower() if payee else payee
+                
+                # Find the expense posting (second posting for most transactions)
+                expense_posting = None
+                for posting in entry.postings:
+                    if posting.account.startswith("Expenses:"):
+                        expense_posting = posting
+                        break
+                
+                if not expense_posting:
+                    continue
+                
+                # Check if payee matches any explicit payee rules
+                new_expense_account = None
+                if payee_lc and payee_lc in expense_accounts:
+                    new_expense_account = expense_accounts[payee_lc]
+                
+                # If we found a new categorization, update the transaction
+                if new_expense_account and new_expense_account != expense_posting.account:
+                    # Create new postings with updated expense account
+                    new_postings = []
+                    for posting in entry.postings:
+                        if posting.account.startswith("Expenses:"):
+                            # Update the expense account
+                            new_postings.append(
+                                data.Posting(
+                                    account=new_expense_account,
+                                    units=posting.units,
+                                    cost=posting.cost,
+                                    price=posting.price,
+                                    flag=posting.flag,
+                                    meta=posting.meta
+                                )
+                            )
+                        else:
+                            # Keep other postings unchanged
+                            new_postings.append(posting)
+                    
+                    # Create updated transaction
+                    updated_entry = data.Transaction(
+                        meta=entry.meta,
+                        date=entry.date,
+                        flag=entry.flag,
+                        payee=entry.payee,
+                        narration=entry.narration,
+                        tags=entry.tags,
+                        links=entry.links,
+                        postings=new_postings
+                    )
+                    modified_entries.append(updated_entry)
+                    recategorized_count += 1
+                else:
+                    modified_entries.append(entry)
+            else:
+                modified_entries.append(entry)
+        
+        # Write updated transactions back to file
+        if recategorized_count > 0:
+            with open(full_path, 'w') as f:
+                for entry in modified_entries:
+                    f.write(printer.format_entry(entry) + '\n')
+            logger.info(f"Updated {recategorized_count} transactions in {full_path}")
+    
+    return recategorized_count
+
+
 def main():
     args = _parse_args_and_load_config()
 
@@ -487,6 +620,10 @@ def main():
                 f.write(printer.format_entry(directive) + '\n')
 
         print(f"Successfully synced {len(account_cursors)} cursors to {cursors_file}")
+
+    if args.recategorize:
+        recategorized_count = _recategorize_transactions(args.root_file, args.start_date, args.end_date)
+        print(f"Recategorized {recategorized_count} transactions")
 
 
 if __name__ == "__main__":
