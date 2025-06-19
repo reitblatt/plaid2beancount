@@ -68,19 +68,9 @@ def test_import_transactions_and_categorization():
     temp_dir, root_file = create_temp_beancount_file()
     try:
         dummy_client = DummyPlaidApi()
-        print(f"DEBUG: Root file path: {root_file}")
-        print(f"DEBUG: Root file exists: {os.path.exists(root_file)}")
-        
         # Test _load_beancount_accounts first
         short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
-        print(f"DEBUG: Loaded accounts: {short_names}")
-        print(f"DEBUG: Expense accounts: {expense_accounts}")
-        print(f"DEBUG: Items: {items}")
-        
         transactions, cursor_directives = _update_transactions(dummy_client, root_file, debug=True)
-        print(f"DEBUG: Transactions returned: {len(transactions)}")
-        print(f"DEBUG: Transaction details: {transactions}")
-        
         # Check that transactions are imported
         assert len(transactions) == 2
         # Check categorization
