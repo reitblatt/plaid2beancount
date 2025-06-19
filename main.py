@@ -226,16 +226,25 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                     # Log transaction details when fetched from Plaid
                     logger.debug(f"Fetched transaction from Plaid: {t['name']} - {t['amount']} for account {short_names.get(t['account_id'], 'Unknown')}")
 
-                    # Create or get category
-                    category = None
+                    # Payee rule overrides Plaid category
+                    payee = t.get("merchant_name") or t.get("name")
+                    payee_lc = payee.lower() if payee else None
+                    expense_account = None
+                    if payee_lc and payee_lc in expense_accounts:
+                        expense_account = expense_accounts[payee_lc]
+                    elif t["personal_finance_category"] is not None:
+                        cat_data = t["personal_finance_category"]
+                        expense_account = expense_accounts.get(cat_data["detailed"])
                     if t["personal_finance_category"] is not None:
                         cat_data = t["personal_finance_category"]
                         category = _get_or_create_category(
                             cat_data["primary"],
                             cat_data["detailed"],
                             "Unknown (Plaid added a new category!)",
-                            expense_accounts.get(cat_data["detailed"])
+                            expense_account
                         )
+                    else:
+                        category = None
 
                     # Create account
                     beancount_name = short_names.get(t["account_id"], "Unknown")
