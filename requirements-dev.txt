@@ -1,0 +1,15 @@
+# Development and testing dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Include production dependencies
+-r requirements.txt
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0  # For coverage reports
+pytest-mock>=3.10.0  # For mocking
+
+# Development tools
+black>=23.0.0  # Code formatting
+flake8>=6.0.0  # Linting
+mypy>=1.0.0    # Type checking 
