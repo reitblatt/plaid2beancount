@@ -519,11 +519,11 @@ def _recategorize_transactions(root_file: str, start_date: Optional[str] = None,
         for error in root_errors:
             # Skip plugin import errors (these are environment issues, not recategorization issues)
             if hasattr(error, 'message') and 'ModuleNotFoundError' in error.message:
-                logger.warning(f"Skipping plugin error (not related to recategorization): {error}")
+                logger.debug(f"Skipping plugin error (not related to recategorization): {error}")
                 continue
             # Skip missing account errors for investment accounts (these are expected in some setups)
             if hasattr(error, 'message') and 'Invalid reference to unknown account' in error.message and 'Income:' in error.message:
-                logger.warning(f"Skipping missing investment account error (not related to recategorization): {error}")
+                logger.debug(f"Skipping missing investment account error (not related to recategorization): {error}")
                 continue
             # Include other validation errors
             recategorization_errors.append(error)
