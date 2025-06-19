@@ -23,7 +23,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "plaid",
+    "plaid-python",
     "beancount",
     "configparser",
 ]
