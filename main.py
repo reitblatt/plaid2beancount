@@ -6,6 +6,7 @@ import os
 import time
 from typing import Dict, List, Optional, Tuple
 import logging
+import tempfile
 
 import plaid
 from plaid.api import plaid_api
@@ -24,7 +25,7 @@ from beancount import loader
 from plaid_models import PlaidTransaction, PlaidInvestmentTransaction, PlaidSecurity, PlaidInvestmentTransactionType, Account, FinanceCategory, PlaidItem, PlaidCursor
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def _parse_args_and_load_config():
@@ -410,22 +411,17 @@ def _recategorize_transactions(root_file: str, start_date: Optional[str] = None,
     
     # Process each transaction file
     base_dir = os.path.dirname(os.path.abspath(root_file))
-    print(f"DEBUG: transaction_files = {transaction_files}")
     for file_path in transaction_files.values():
         full_path = os.path.join(base_dir, file_path)
-        print(f"DEBUG: About to process file: {full_path}")
         if not os.path.exists(full_path):
             continue
             
         logger.info(f"Processing file: {full_path}")
         
-        # Load existing transactions
+        # Load the transaction file directly for processing (validation errors are expected)
         entries, errors, options = loader.load_file(full_path)
         if errors:
-            logger.warning(f"Errors loading {full_path}: {errors}")
-            # Continue processing even with validation errors for recategorization
-            # logger.warning(f"Errors loading {full_path}: {errors}")
-            # continue
+            logger.debug(f"Validation errors loading {full_path} (expected during processing): {len(errors)} errors")
         
         # Filter transactions by date if specified
         transactions_to_process = []
@@ -457,8 +453,16 @@ def _recategorize_transactions(root_file: str, start_date: Optional[str] = None,
                 
                 # Check if payee matches any explicit payee rules
                 new_expense_account = None
-                if payee_lc and payee_lc in expense_accounts:
-                    new_expense_account = expense_accounts[payee_lc]
+                if payee_lc:
+                    # Check for exact match first
+                    if payee_lc in expense_accounts:
+                        new_expense_account = expense_accounts[payee_lc]
+                    else:
+                        # Check for partial matches (any part of the payee rule matches the transaction payee)
+                        for payee_rule, account in expense_accounts.items():
+                            if payee_rule and payee_rule in payee_lc:
+                                new_expense_account = account
+                                break
                 
                 # If we found a new categorization, update the transaction
                 if new_expense_account and new_expense_account != expense_posting.account:
@@ -506,11 +510,42 @@ def _recategorize_transactions(root_file: str, start_date: Optional[str] = None,
                     f.write(printer.format_entry(entry) + '\n')
             logger.info(f"Updated {recategorized_count} transactions in {full_path}")
     
+    # Always validate the entire setup by loading the root file (which includes all transaction files)
+    logger.info("Validating recategorization by loading root file...")
+    root_entries, root_errors, root_options = loader.load_file(root_file)
+    if root_errors:
+        # Filter out errors that aren't related to recategorization
+        recategorization_errors = []
+        for error in root_errors:
+            # Skip plugin import errors (these are environment issues, not recategorization issues)
+            if hasattr(error, 'message') and 'ModuleNotFoundError' in error.message:
+                logger.warning(f"Skipping plugin error (not related to recategorization): {error}")
+                continue
+            # Skip missing account errors for investment accounts (these are expected in some setups)
+            if hasattr(error, 'message') and 'Invalid reference to unknown account' in error.message and 'Income:' in error.message:
+                logger.warning(f"Skipping missing investment account error (not related to recategorization): {error}")
+                continue
+            # Include other validation errors
+            recategorization_errors.append(error)
+        
+        if recategorization_errors:
+            logger.error(f"Validation errors after recategorization: {recategorization_errors}")
+            return -1  # Indicate failure
+        else:
+            logger.info("Recategorization validation successful - only non-critical errors found")
+    else:
+        logger.info("Recategorization validation successful - no errors")
+    
     return recategorized_count
 
 
 def main():
     args = _parse_args_and_load_config()
+
+    # Set up debug logging if requested
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
 
     # Load config
     config = configparser.ConfigParser()

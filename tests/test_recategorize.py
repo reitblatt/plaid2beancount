@@ -244,4 +244,57 @@ def test_recategorize_overlapping_rules():
                         found = True
         assert found, "Payee rule should override category rule"
     finally:
+        shutil.rmtree(temp_dir)
+
+def test_recategorize_with_relative_paths_and_account_definitions():
+    """
+    This test mimics a real-world scenario where:
+    - The root file defines accounts and uses relative paths for transaction files.
+    - The transaction file does NOT include the root file and references accounts only defined in the root.
+    - The recategorization function should work without validation errors.
+    - Validation should be done by loading the root file (which includes all transaction files).
+    """
+    root_content = '''
+2024-01-01 open Assets:Bank:Checking
+  plaid_account_id: "acc1"
+  transaction_file: "accounts/bank/checking.beancount"
+2024-01-01 open Expenses:Food:Restaurants
+  plaid_category: "FOOD_AND_DRINK_RESTAURANTS"
+2024-01-01 open Expenses:Food:Bars
+  payees: "STARBUCKS"
+
+include "accounts/bank/checking.beancount"
+'''
+    tx_content = '''
+2024-01-10 * "STARBUCKS" "Coffee"
+  Assets:Bank:Checking  -5.00 USD
+  Expenses:Food:Restaurants  5.00 USD
+    plaid_transaction_id: "txn1"
+'''
+    temp_dir = tempfile.mkdtemp()
+    try:
+        root_file = os.path.join(temp_dir, "root.beancount")
+        tx_dir = os.path.join(temp_dir, "accounts/bank")
+        os.makedirs(tx_dir)
+        tx_file = os.path.join(tx_dir, "checking.beancount")
+        with open(root_file, "w") as f:
+            f.write(root_content)
+        with open(tx_file, "w") as f:
+            f.write(tx_content)
+        # Run recategorization
+        recategorized_count = _recategorize_transactions(root_file)
+        assert recategorized_count == 1
+        # Validate by loading the root file (which includes all transaction files)
+        entries, errors, options = loader.load_file(root_file)
+        # Confirm no errors from the loader
+        assert not errors, f"Loader returned errors: {errors}"
+        # Check that the transaction was recategorized
+        found = False
+        for entry in entries:
+            if hasattr(entry, "postings"):
+                for posting in entry.postings:
+                    if posting.account == "Expenses:Food:Bars":
+                        found = True
+        assert found, "Transaction was not recategorized to Expenses:Food:Bars"
+    finally:
         shutil.rmtree(temp_dir) 
