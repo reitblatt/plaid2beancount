@@ -728,7 +728,7 @@ def main():
             if os.path.exists(full_path):
                 entries, errors, options = loader.load_file(full_path)
                 if errors:
-                    logger.warning(f"Errors loading {full_path}: {errors}")
+                    logger.debug(f"Validation errors loading {full_path} (expected when loading individual files): {errors}")
                 
                 # Find the newest transaction and collect all transaction IDs
                 for entry in entries:
