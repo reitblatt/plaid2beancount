@@ -454,18 +454,22 @@ def _recategorize_transactions(root_file: str, start_date: Optional[str] = None,
                 # Check if payee matches any explicit payee rules
                 new_expense_account = None
                 if payee_lc:
+                    logger.debug(f"Checking payee: '{payee_lc}' against expense accounts: {list(expense_accounts.keys())}")
                     # Check for exact match first
                     if payee_lc in expense_accounts:
                         new_expense_account = expense_accounts[payee_lc]
+                        logger.debug(f"Found exact match: {payee_lc} -> {new_expense_account}")
                     else:
-                        # Check for partial matches (any part of the payee rule matches the transaction payee)
+                        # Check for partial matches (transaction payee should be found within the payee rule)
                         for payee_rule, account in expense_accounts.items():
-                            if payee_rule and payee_rule in payee_lc:
+                            if payee_rule and payee_lc in payee_rule:
                                 new_expense_account = account
+                                logger.debug(f"Found partial match: '{payee_lc}' in '{payee_rule}' -> {new_expense_account}")
                                 break
                 
                 # If we found a new categorization, update the transaction
                 if new_expense_account and new_expense_account != expense_posting.account:
+                    logger.debug(f"Recategorizing transaction from {expense_posting.account} to {new_expense_account}")
                     # Create new postings with updated expense account
                     new_postings = []
                     for posting in entry.postings:
@@ -486,8 +490,12 @@ def _recategorize_transactions(root_file: str, start_date: Optional[str] = None,
                             new_postings.append(posting)
                     
                     # Create updated transaction
+                    # Copy all metadata fields, including plaid_transaction_id
+                    new_meta = dict(entry.meta) if entry.meta else {}
+                    if entry.meta and 'plaid_transaction_id' in entry.meta:
+                        new_meta['plaid_transaction_id'] = entry.meta['plaid_transaction_id']
                     updated_entry = data.Transaction(
-                        meta=entry.meta,
+                        meta=new_meta,
                         date=entry.date,
                         flag=entry.flag,
                         payee=entry.payee,
@@ -496,18 +504,132 @@ def _recategorize_transactions(root_file: str, start_date: Optional[str] = None,
                         links=entry.links,
                         postings=new_postings
                     )
+                    logger.debug(f"Modified transaction metadata: {updated_entry.meta}")
                     modified_entries.append(updated_entry)
                     recategorized_count += 1
                 else:
+                    if new_expense_account:
+                        logger.debug(f"Transaction already has correct account: {expense_posting.account}")
+                    else:
+                        logger.debug(f"No matching payee rule found for: {payee_lc}")
                     modified_entries.append(entry)
             else:
                 modified_entries.append(entry)
         
-        # Write updated transactions back to file
+        # Write updated transactions back to file using inline modification
         if recategorized_count > 0:
+            # Read the original file content
+            with open(full_path, 'r') as f:
+                lines = f.readlines()
+            
+            # Create a mapping of transactions that need to be modified
+            transactions_to_modify = {}
+            for entry in modified_entries:
+                if isinstance(entry, data.Transaction):
+                    # Use transaction ID or full metadata to identify the transaction
+                    identifier = None
+                    meta_identifier = None
+                    if entry.meta and 'plaid_transaction_id' in entry.meta:
+                        identifier = entry.meta['plaid_transaction_id']
+                        logger.debug(f"Using plaid_transaction_id as identifier: {identifier}")
+                    # Always create the metadata identifier
+                    date_str = entry.date.strftime('%Y-%m-%d')
+                    flag_str = entry.flag if entry.flag else ''
+                    payee_str = entry.payee if entry.payee else ''
+                    narration_str = entry.narration if entry.narration else ''
+                    meta_identifier = f"{date_str}_{flag_str}_{payee_str}_{narration_str}"
+                    logger.debug(f"Using metadata as identifier: {meta_identifier}")
+                    # Add both identifiers if available
+                    if identifier:
+                        transactions_to_modify[identifier] = entry
+                        logger.debug(f"Added transaction to modifications: {identifier}")
+                    transactions_to_modify[meta_identifier] = entry
+                    logger.debug(f"Added transaction to modifications: {meta_identifier}")
+            
+            logger.debug(f"Transactions to modify: {list(transactions_to_modify.keys())}")
+            
+            # Parse the file to find transaction boundaries and modify in place
+            new_lines = []
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                stripped_line = line.strip()
+                
+                # Check if this line starts a new transaction (starts with a date)
+                if stripped_line and len(stripped_line) >= 10 and stripped_line[:10].replace('-', '').isdigit():
+                    # Try to identify this transaction
+                    transaction_identifier = None
+                    transaction_lines = [line]
+                    j = i + 1
+                    
+                    # Collect all lines that belong to this transaction
+                    while j < len(lines):
+                        next_line = lines[j]
+                        next_stripped = next_line.strip()
+                        
+                        # If next line starts with a date, it's a new transaction
+                        if next_stripped and len(next_stripped) >= 10 and next_stripped[:10].replace('-', '').isdigit():
+                            break
+                        
+                        # If next line is empty, it might be the end of the transaction
+                        if not next_stripped:
+                            # Check if the line after this is a new transaction
+                            if j + 1 < len(lines):
+                                next_next_stripped = lines[j + 1].strip()
+                                if next_next_stripped and len(next_next_stripped) >= 10 and next_next_stripped[:10].replace('-', '').isdigit():
+                                    break
+                        
+                        transaction_lines.append(next_line)
+                        j += 1
+                    
+                    # Try to extract transaction identifier from the transaction lines
+                    transaction_text = ''.join(transaction_lines)
+                    
+                    # Look for plaid_transaction_id in the transaction
+                    import re
+                    for tx_line in transaction_lines:
+                        if 'plaid_transaction_id:' in tx_line:
+                            match = re.search(r'plaid_transaction_id:\s*"([^"]+)"', tx_line)
+                            if match:
+                                transaction_identifier = match.group(1)
+                                break
+                    
+                    # If no transaction ID, try to match by full transaction metadata
+                    if not transaction_identifier:
+                        # Extract the full transaction metadata from the first line
+                        # Format: date flag "payee" "narration"
+                        tx_pattern = r'^(\d{4}-\d{2}-\d{2})\s+([*!]?)\s*"([^"]*)"\s*"([^"]*)"'
+                        match = re.match(tx_pattern, stripped_line)
+                        if match:
+                            date_part, flag_part, payee_part, narration_part = match.groups()
+                            # Create a unique identifier from the full transaction metadata
+                            transaction_identifier = f"{date_part}_{flag_part}_{payee_part}_{narration_part}"
+                    
+                    # Check if this transaction needs to be modified
+                    if transaction_identifier and transaction_identifier in transactions_to_modify:
+                        # Replace the transaction with the modified version
+                        modified_entry = transactions_to_modify[transaction_identifier]
+                        new_lines.append(printer.format_entry(modified_entry) + '\n')
+                        logger.debug(f"Modified transaction: {transaction_identifier}")
+                    else:
+                        # Keep the original transaction
+                        new_lines.extend(transaction_lines)
+                        if transaction_identifier:
+                            logger.debug(f"Transaction not found in modifications: {transaction_identifier}")
+                        else:
+                            logger.debug(f"Could not identify transaction")
+                    
+                    # Skip to the end of this transaction
+                    i = j
+                else:
+                    # Keep non-transaction lines as-is
+                    new_lines.append(line)
+                    i += 1
+            
+            # Write the modified content back to file
             with open(full_path, 'w') as f:
-                for entry in modified_entries:
-                    f.write(printer.format_entry(entry) + '\n')
+                f.writelines(new_lines)
+            
             logger.info(f"Updated {recategorized_count} transactions in {full_path}")
     
     # Always validate the entire setup by loading the root file (which includes all transaction files)

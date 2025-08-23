@@ -297,4 +297,181 @@ include "accounts/bank/checking.beancount"
                         found = True
         assert found, "Transaction was not recategorized to Expenses:Food:Bars"
     finally:
+        shutil.rmtree(temp_dir)
+
+def test_inline_modification_preserves_comments():
+    """Test that inline modification preserves comments and formatting."""
+    root_content = '''
+2024-01-01 open Assets:Checking
+  plaid_account_id: "acc1"
+  transaction_file: "accounts/checking/checking.beancount"
+2024-01-01 open Expenses:Food:Restaurants
+  plaid_category: "FOOD_AND_DRINK_RESTAURANTS"
+2024-01-01 open Expenses:Food:Bars
+  payees: "STARBUCKS"
+'''
+    tx_content = '''
+; This is a comment at the top
+; Another comment
+
+2024-01-10 * "STARBUCKS" "Coffee"
+  Assets:Checking  -5.00 USD
+  Expenses:Food:Restaurants  5.00 USD
+    plaid_transaction_id: "txn1"
+
+; Comment between transactions
+
+2024-01-11 * "DUNKIN" "Donuts"
+  Assets:Checking  -3.00 USD
+  Expenses:Food:Restaurants  3.00 USD
+    plaid_transaction_id: "txn2"
+
+; Comment at the end
+'''
+    temp_dir = tempfile.mkdtemp()
+    try:
+        root_file = os.path.join(temp_dir, "root.beancount")
+        tx_dir = os.path.join(temp_dir, "accounts/checking")
+        os.makedirs(tx_dir)
+        tx_file = os.path.join(tx_dir, "checking.beancount")
+        with open(root_file, "w") as f:
+            f.write(root_content)
+        with open(tx_file, "w") as f:
+            f.write(tx_content)
+        
+        # Run recategorization
+        recategorized_count = _recategorize_transactions(root_file)
+        assert recategorized_count == 1
+        
+        # Check that comments and formatting are preserved
+        with open(tx_file, 'r') as f:
+            modified_content = f.read()
+        
+        # Verify comments are still there
+        assert "; This is a comment at the top" in modified_content
+        assert "; Another comment" in modified_content
+        assert "; Comment between transactions" in modified_content
+        assert "; Comment at the end" in modified_content
+        
+        # Verify only STARBUCKS transaction was modified
+        assert "Expenses:Food:Bars" in modified_content
+        assert "Expenses:Food:Restaurants" in modified_content  # DUNKIN should still be here
+        
+        # Verify transaction structure is maintained
+        lines = modified_content.split('\n')
+        assert any('2024-01-10 * "STARBUCKS"' in line for line in lines)
+        assert any('2024-01-11 * "DUNKIN"' in line for line in lines)
+        
+    finally:
+        shutil.rmtree(temp_dir)
+
+def test_inline_modification_with_plaid_transaction_id():
+    """Test inline modification using plaid_transaction_id for identification."""
+    root_content = '''
+2024-01-01 open Assets:Checking
+  plaid_account_id: "acc1"
+  transaction_file: "accounts/checking/checking.beancount"
+2024-01-01 open Expenses:Food:Restaurants
+  plaid_category: "FOOD_AND_DRINK_RESTAURANTS"
+2024-01-01 open Expenses:Food:Bars
+  payees: "STARBUCKS"
+'''
+    tx_content = '''
+2024-01-10 * "STARBUCKS" "Coffee"
+  Assets:Checking  -5.00 USD
+  Expenses:Food:Restaurants  5.00 USD
+    plaid_transaction_id: "unique_id_123"
+
+2024-01-11 * "DUNKIN" "Donuts"
+  Assets:Checking  -3.00 USD
+  Expenses:Food:Restaurants  3.00 USD
+    plaid_transaction_id: "unique_id_456"
+'''
+    temp_dir = tempfile.mkdtemp()
+    try:
+        root_file = os.path.join(temp_dir, "root.beancount")
+        tx_dir = os.path.join(temp_dir, "accounts/checking")
+        os.makedirs(tx_dir)
+        tx_file = os.path.join(tx_dir, "checking.beancount")
+        with open(root_file, "w") as f:
+            f.write(root_content)
+        with open(tx_file, "w") as f:
+            f.write(tx_content)
+        
+        # Run recategorization
+        recategorized_count = _recategorize_transactions(root_file)
+        assert recategorized_count == 1
+        
+        # Check that only STARBUCKS transaction was modified
+        with open(tx_file, 'r') as f:
+            modified_content = f.read()
+        
+        # STARBUCKS should be recategorized
+        assert "Expenses:Food:Bars" in modified_content
+        # DUNKIN should remain unchanged
+        assert "Expenses:Food:Restaurants" in modified_content
+        
+        # Verify both transactions are still present
+        lines = modified_content.split('\n')
+        assert any('unique_id_123' in line for line in lines)
+        assert any('unique_id_456' in line for line in lines)
+        
+    finally:
+        shutil.rmtree(temp_dir)
+
+def test_inline_modification_without_plaid_transaction_id():
+    """Test inline modification using full metadata when plaid_transaction_id is not available."""
+    root_content = '''
+2024-01-01 open Assets:Checking
+  plaid_account_id: "acc1"
+  transaction_file: "accounts/checking/checking.beancount"
+2024-01-01 open Expenses:Food:Restaurants
+  plaid_category: "FOOD_AND_DRINK_RESTAURANTS"
+2024-01-01 open Expenses:Food:Bars
+  payees: "STARBUCKS"
+'''
+    tx_content = '''
+2024-01-10 * "STARBUCKS" "Coffee"
+  Assets:Checking  -5.00 USD
+  Expenses:Food:Restaurants  5.00 USD
+
+2024-01-11 * "STARBUCKS" "Coffee"
+  Assets:Checking  -4.00 USD
+  Expenses:Food:Restaurants  4.00 USD
+
+2024-01-12 * "DUNKIN" "Donuts"
+  Assets:Checking  -3.00 USD
+  Expenses:Food:Restaurants  3.00 USD
+'''
+    temp_dir = tempfile.mkdtemp()
+    try:
+        root_file = os.path.join(temp_dir, "root.beancount")
+        tx_dir = os.path.join(temp_dir, "accounts/checking")
+        os.makedirs(tx_dir)
+        tx_file = os.path.join(tx_dir, "checking.beancount")
+        with open(root_file, "w") as f:
+            f.write(root_content)
+        with open(tx_file, "w") as f:
+            f.write(tx_content)
+        
+        # Run recategorization
+        recategorized_count = _recategorize_transactions(root_file)
+        assert recategorized_count == 2  # Both STARBUCKS transactions should be recategorized
+        
+        # Check that both STARBUCKS transactions were modified
+        with open(tx_file, 'r') as f:
+            modified_content = f.read()
+        
+        # Both STARBUCKS transactions should be recategorized
+        assert modified_content.count("Expenses:Food:Bars") == 2
+        # DUNKIN should remain unchanged
+        assert "Expenses:Food:Restaurants" in modified_content
+        
+        # Verify all three transactions are still present
+        lines = modified_content.split('\n')
+        assert any('2024-01-10 * "STARBUCKS"' in line for line in lines)
+        assert any('2024-01-11 * "STARBUCKS"' in line for line in lines)
+        assert any('2024-01-12 * "DUNKIN"' in line for line in lines)
+        
+    finally:
         shutil.rmtree(temp_dir) 
