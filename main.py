@@ -321,8 +321,8 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
             
             # Process each transaction
             for t in response["investment_transactions"]:
-                print(f"Raw transaction type: {t['type']}, subtype: {t.get('subtype')}")
-                print(f"Raw transaction: {t}")
+                logger.debug(f"Raw transaction type: {t['type']}, subtype: {t.get('subtype')}")
+                logger.debug(f"Raw transaction: {t}")
                 # Convert date to string if it's not already
                 transaction_date = t["date"]
                 if not isinstance(transaction_date, str):
@@ -368,7 +368,7 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
                     )
                 )
         except plaid.ApiException as e:
-            print(f"Error getting investment transactions for item {item_id}: {e}")
+            logger.warning(f"Error getting investment transactions for item {item_id}: {e}")
             continue
     
     return investment_transactions
@@ -693,14 +693,14 @@ def main():
         from transactions.beancount_renderer import BeancountRenderer
         renderer = BeancountRenderer(transactions, investment_transactions)
         entries = [renderer._to_beancount(transaction) for transaction in transactions] + [renderer._to_investment_beancount(transaction) for transaction in investment_transactions]
-        print(f"Generated {len(entries)} entries")
+        logger.info(f"Generated {len(entries)} entries")
                 
         # Group transactions by account
         account_entries = {}
         for entry in entries:
             # Get the first posting's account to determine which file to write to
             if isinstance(entry, data.Transaction) and entry.postings:
-                print(f"Processing entry: {entry}")
+                logger.debug(f"Processing entry: {entry}")
                 account = entry.postings[0].account
                 # Find the corresponding Account object for this beancount account name
                 matching_account = next((t.account for t in transactions + investment_transactions 
@@ -710,14 +710,14 @@ def main():
                         account_entries[matching_account.transaction_file] = []
                     account_entries[matching_account.transaction_file].append(entry)
             else:
-                print(f"Skipping entry: {entry}")
-                print(f"Entry type: {type(entry)}")
-                print(f"Entry postings: {entry.postings}")
+                logger.debug(f"Skipping entry: {entry}")
+                logger.debug(f"Entry type: {type(entry)}")
+                logger.debug(f"Entry postings: {entry.postings}")
         
         # Write transactions to their respective account files
         base_dir = os.path.dirname(os.path.abspath(args.root_file))
         for file_path, account_transactions in account_entries.items():
-            print(f"Looking for transactions to write for {file_path}")
+            logger.info(f"Looking for transactions to write for {file_path}")
             # Ensure the full path exists
             full_path = os.path.join(base_dir, file_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
@@ -728,7 +728,7 @@ def main():
             if os.path.exists(full_path):
                 entries, errors, options = loader.load_file(full_path)
                 if errors:
-                    print(f"Warning: Errors loading {full_path}: {errors}")
+                    logger.warning(f"Errors loading {full_path}: {errors}")
                 
                 # Find the newest transaction and collect all transaction IDs
                 for entry in entries:
@@ -755,7 +755,7 @@ def main():
                 with open(full_path, 'a') as f:
                     for transaction in new_transactions:
                         f.write(printer.format_entry(transaction) + '\n')
-                print(f"Successfully wrote {len(new_transactions)} transactions to {full_path}")
+                logger.info(f"Successfully wrote {len(new_transactions)} transactions to {full_path}")
 
         # Write cursor directives to file
         cursors_file = os.path.join(base_dir, "plaid_cursors.beancount")
@@ -782,14 +782,14 @@ def main():
 
             # Write only the latest cursor for each account
             for directive in account_cursors.values():
-                print(f"Writing cursor directive: {directive}")
+                logger.debug(f"Writing cursor directive: {directive}")
                 f.write(printer.format_entry(directive) + '\n')
 
-        print(f"Successfully synced {len(account_cursors)} cursors to {cursors_file}")
+        logger.info(f"Successfully synced {len(account_cursors)} cursors to {cursors_file}")
 
     if args.recategorize:
         recategorized_count = _recategorize_transactions(args.root_file, args.start_date, args.end_date)
-        print(f"Recategorized {recategorized_count} transactions")
+        logger.info(f"Recategorized {recategorized_count} transactions")
 
 
 if __name__ == "__main__":
