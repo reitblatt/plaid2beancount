@@ -62,147 +62,126 @@ class BeancountRenderer:
         
     def _to_investment_beancount(self, transaction: PlaidInvestmentTransaction) -> Transaction:                        
         """Convert a PlaidInvestmentTransaction to a Beancount Transaction."""
-        # Get the account name
-        account = transaction.account.beancount_name
-        logger.debug(f"Processing transaction: {transaction.type.type} - {transaction.type.subtype} - {transaction.date} - {transaction.amount} - {transaction.security.ticker_symbol}")
-        meta = {"plaid_transaction_id": transaction.investment_transaction_id}
-        transaction_common_info = {
-            'meta': meta,
-            'date': transaction.date,
-            'payee': transaction.security.ticker_symbol,
-            'flag': "!",
-            'narration': transaction.name,
-            'tags': set(),
-            'links': set(),
-        }
-        
-        # Create the transaction
-        transaction_type = transaction.type.type.value
-        transaction_subtype = transaction.type.subtype.value
-        if transaction_type == "buy":
-            if transaction_subtype == "buy":
-                # Regular buy
-                logger.debug("Processing buy - buy transaction")
-                return Transaction(                                        
-                    postings=[
-                        Posting(
-                            account=account,
-                            units=Amount(transaction.quantity, transaction.security.ticker_symbol if transaction.security.ticker_symbol else transaction.security.name),
-                            cost=CostSpec(transaction.price, None, None, None, None, None),
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                        Posting(
-                            account=account + ":Cash",
-                            units=Amount(-transaction.amount if transaction.amount > 0 else transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                    ],
-                    **transaction_common_info
-                )
-            elif transaction_subtype == "contribution":
-                # Contribution
-                logger.debug("Processing buy - contribution transaction")
-                return Transaction(                                                          
-                    postings=[
-                        Posting(
-                            account=account + ":Cash",
-                            units=Amount(-transaction.amount if transaction.amount > 0 else transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                        Posting(
-                            account="Assets:Transfer",
-                            units=Amount(transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                    ],
-                    **transaction_common_info
-                )
-        elif transaction_type == "cash":
-            if transaction_subtype == "dividend":
-                # Dividend
-                logger.debug("Processing cash - dividend transaction")
-                return Transaction(                                                        
-                    postings=[
-                        Posting(
-                            account=account + ":Cash",
-                            units=Amount(transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                        Posting(
-                            account="Income:Dividends",
-                            units=Amount(-transaction.amount if transaction.amount > 0 else transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                    ],
-                    **transaction_common_info
-                )
-            elif transaction_subtype == "deposit":
-                # Deposit
-                logger.debug("Processing cash - deposit transaction")
-                return Transaction(                                        
-                    postings=[
-                        Posting(
-                            account=account + ":Cash",
-                            units=Amount(transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                        Posting(
-                            account="Assets:Transfer",
-                            units=Amount(-transaction.amount if transaction.amount > 0 else transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                    ],
-                    **transaction_common_info
-                )
-            elif transaction_subtype == "withdrawal":
-                # Withdrawal
-                logger.debug("Processing cash - withdrawal transaction")
-                return Transaction(
-                    postings=[
-                        Posting(
-                            account=account + ":Cash",
-                            units=Amount(-transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                        Posting(
-                            account="Assets:Transfer",
-                            units=Amount(transaction.amount, transaction.iso_currency_code),
-                            cost=None,
-                            price=None,
-                            flag=None,
-                            meta=None,
-                        ),
-                    ],
-                    **transaction_common_info
-                )
+        if transaction.account.beancount_name is not None:
+            account = transaction.account.beancount_name
         else:
-            logger.error(f"Unknown transaction type: {transaction.type.type} - {transaction.type.subtype}")
+            account = "Unknown"
+            
+        ticker = transaction.security.ticker_symbol
+        
+        gains_account = None
+        source_posting = None
+        sink_posting = None
+            
+        # buy or sweep in
+        if transaction.type.type.value == 'buy' or (transaction.type.type.value == 'fee' and transaction.type.subtype.value == 'miscellaneous fee'):            
+            source_posting = Posting(
+                account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+            )
+            # For some reason, dividends are not being recorded as a quantity
+            quantity = transaction.quantity or transaction.amount
+            price = transaction.price or Decimal('1.0')
+                                                
+            sink_posting = Posting(
+                account + ":" + ticker, Amount(quantity, ticker), None, Amount(price, "USD"), None, None
+            )
+        elif transaction.type.type.value == 'sell':            
+            source_posting = Posting(
+                account + ":" + ticker, Amount(-transaction.quantity, ticker), None, Amount(transaction.price, "USD"), None, None
+            )
+            sink_posting = Posting(
+                account + ":" + "Cash", Amount(transaction.amount, "USD"), None, None, None, None
+            )            
+            gains_account = account.replace("Assets", "Income") + "Capital-Gains" + ticker
+            
+        elif transaction.type.type.value == 'fee':
+            if transaction.type.subtype.value == 'dividend':
+                source_posting = Posting(
+                    account.replace("Assets", "Income") + ":Dividends:" + ticker, Amount(transaction.amount, "USD"), None, None, None, None
+                )
+                sink_posting = Posting(
+                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None    
+                )
+        
+            # This is really a sweep out
+            elif transaction.type.subtype.value == 'interest':
+                source_posting = Posting(
+                    account + ":" + ticker, Amount(transaction.amount, ticker), None, Amount(transaction.price, "USD"), None, None
+                )
+                sink_posting = Posting(
+                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None    
+                )                            
+        elif transaction.type.type.value == 'cash':
+            if transaction.type.subtype.value == 'deposit':
+                if transaction.name == 'Sweep out':
+                    source_posting = Posting(
+                        account + ":" + ticker, Amount(transaction.amount, ticker), None, Amount(transaction.price, "USD"), None, None
+                    )
+                else:
+                    source_posting = Posting(
+                        "Assets:Transfer", Amount(transaction.amount, "USD"), None, None, None, None
+                    )
+                sink_posting = Posting(
+                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                )
+            elif transaction.type.subtype.value == 'withdrawal':                
+                source_posting = Posting(
+                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                )
+                if transaction.name == 'Sweep in':
+                    # For some reason, this is not being recorded as a quantity
+                    quantity = transaction.quantity or transaction.amount
+                    price = transaction.price or Decimal('1.0')
+                    sink_posting = Posting(account + ":" + ticker, Amount(quantity, ticker), None, Amount(price, "USD"), None, None)
+                else:
+                    sink_posting = Posting(
+                        "Assets:Transfer", Amount(transaction.amount, "USD"), None, None, None, None
+                    )
+            elif transaction.type.subtype.value == 'dividend':
+                source_posting = Posting(
+                    account.replace("Assets", "Income") + ":Dividends:" + ticker, Amount(transaction.amount, "USD"), None, None, None, None
+                )
+                sink_posting = Posting(
+                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                )
+        elif transaction.type.type.value == 'transfer':
+            # At some point Vanguard started using the transfer type for sweep in/out...
+            if transaction.type.subtype.value == 'transfer':
+                if transaction.name == 'Sweep in':
+                    source_posting = Posting(
+                        account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                    )
+                    # For some reason, this is not being recorded as a quantity
+                    quantity = transaction.quantity or transaction.amount
+                    price = transaction.price or Decimal('1.0')
+                                                        
+                    sink_posting = Posting(
+                        account + ":" + ticker, Amount(quantity, ticker), None, Amount(price, "USD"), None, None
+                    )
+                elif transaction.name == 'Sweep out':
+                    source_posting = Posting(
+                        account + ":" + ticker, Amount(transaction.amount, ticker), None, Amount(transaction.price, "USD"), None, None
+                    )
+                    sink_posting = Posting(
+                        account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None    
+                    )                   
+                    
+        if source_posting is None or sink_posting is None:
+            print(transaction)
             raise ValueError(f"Unknown transaction type: {transaction.type.type} - {transaction.type.subtype}")
-
+        postings = [source_posting, sink_posting]
+        if gains_account is not None:
+            postings.append(Posting(
+                gains_account, None, None, None, None, None
+            ))
+        return Transaction(
+            meta={"plaid_transaction_id": transaction.investment_transaction_id},
+            date=transaction.date,            
+            payee=ticker,
+            narration=transaction.name,
+            flag="!",
+            tags=set(),
+            links=set(),
+            postings=postings,
+        )
         
