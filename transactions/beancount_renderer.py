@@ -3,6 +3,9 @@ from typing import List
 from models import PlaidTransaction, PlaidInvestmentTransaction
 from beancount.core.data import Transaction, Amount, Posting, Price, Balance, CostSpec
 from beancount.parser.printer import EntryPrinter
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class BeancountRenderer:
@@ -61,21 +64,26 @@ class BeancountRenderer:
         """Convert a PlaidInvestmentTransaction to a Beancount Transaction."""
         # Get the account name
         account = transaction.account.beancount_name
-        print(f"Processing transaction: {transaction.type.type} - {transaction.type.subtype} - {transaction.date} - {transaction.amount}")
-
+        logger.debug(f"Processing transaction: {transaction.type.type} - {transaction.type.subtype} - {transaction.date} - {transaction.amount} - {transaction.security.ticker_symbol}")
+        meta = {"plaid_transaction_id": transaction.investment_transaction_id}
+        transaction_common_info = {
+            'meta': meta,
+            'date': transaction.date,
+            'payee': transaction.security.ticker_symbol,
+            'flag': "!",
+            'narration': transaction.name,
+            'tags': set(),
+            'links': set(),
+        }
+        
         # Create the transaction
-        if transaction.type.type == "buy":
-            if transaction.type.subtype == "buy":
+        transaction_type = transaction.type.type.value
+        transaction_subtype = transaction.type.subtype.value
+        if transaction_type == "buy":
+            if transaction_subtype == "buy":
                 # Regular buy
-                print("Processing buy - buy transaction")
-                return Transaction(
-                    meta=None,
-                    date=transaction.date,
-                    flag="*",
-                    payee=transaction.name,
-                    narration="",
-                    tags=set(),
-                    links=set(),
+                logger.debug("Processing buy - buy transaction")
+                return Transaction(                                        
                     postings=[
                         Posting(
                             account=account,
@@ -94,18 +102,12 @@ class BeancountRenderer:
                             meta=None,
                         ),
                     ],
+                    **transaction_common_info
                 )
-            elif transaction.type.subtype == "contribution":
+            elif transaction_subtype == "contribution":
                 # Contribution
-                print("Processing buy - contribution transaction")
-                return Transaction(
-                    meta=None,
-                    date=transaction.date,
-                    flag="*",
-                    payee=transaction.name,
-                    narration="",
-                    tags=set(),
-                    links=set(),
+                logger.debug("Processing buy - contribution transaction")
+                return Transaction(                                                          
                     postings=[
                         Posting(
                             account=account + ":Cash",
@@ -116,7 +118,7 @@ class BeancountRenderer:
                             meta=None,
                         ),
                         Posting(
-                            account="Assets:Checking",
+                            account="Assets:Transfer",
                             units=Amount(transaction.amount, transaction.iso_currency_code),
                             cost=None,
                             price=None,
@@ -124,19 +126,13 @@ class BeancountRenderer:
                             meta=None,
                         ),
                     ],
+                    **transaction_common_info
                 )
-        elif transaction.type.type == "cash":
-            if transaction.type.subtype == "dividend":
+        elif transaction_type == "cash":
+            if transaction_subtype == "dividend":
                 # Dividend
-                print("Processing cash - dividend transaction")
-                return Transaction(
-                    meta=None,
-                    date=transaction.date,
-                    flag="*",
-                    payee=transaction.name,
-                    narration="",
-                    tags=set(),
-                    links=set(),
+                logger.debug("Processing cash - dividend transaction")
+                return Transaction(                                                        
                     postings=[
                         Posting(
                             account=account + ":Cash",
@@ -155,18 +151,12 @@ class BeancountRenderer:
                             meta=None,
                         ),
                     ],
+                    **transaction_common_info
                 )
-            elif transaction.type.subtype == "deposit":
+            elif transaction_subtype == "deposit":
                 # Deposit
-                print("Processing cash - deposit transaction")
-                return Transaction(
-                    meta=None,
-                    date=transaction.date,
-                    flag="*",
-                    payee=transaction.name,
-                    narration="",
-                    tags=set(),
-                    links=set(),
+                logger.debug("Processing cash - deposit transaction")
+                return Transaction(                                        
                     postings=[
                         Posting(
                             account=account + ":Cash",
@@ -177,7 +167,7 @@ class BeancountRenderer:
                             meta=None,
                         ),
                         Posting(
-                            account="Assets:Checking",
+                            account="Assets:Transfer",
                             units=Amount(-transaction.amount if transaction.amount > 0 else transaction.amount, transaction.iso_currency_code),
                             cost=None,
                             price=None,
@@ -185,36 +175,34 @@ class BeancountRenderer:
                             meta=None,
                         ),
                     ],
+                    **transaction_common_info
                 )
-            elif transaction.type.subtype == "withdrawal":
+            elif transaction_subtype == "withdrawal":
                 # Withdrawal
-                print("Processing cash - withdrawal transaction")
-        return Transaction(
-                    meta=None,
-            date=transaction.date,            
-                    flag="*",
-                    payee=transaction.name,
-                    narration="",
-            tags=set(),
-            links=set(),
+                logger.debug("Processing cash - withdrawal transaction")
+                return Transaction(
                     postings=[
                         Posting(
                             account=account + ":Cash",
-                            units=Amount(-transaction.amount if transaction.amount > 0 else transaction.amount, transaction.iso_currency_code),
+                            units=Amount(-transaction.amount, transaction.iso_currency_code),
                             cost=None,
                             price=None,
                             flag=None,
                             meta=None,
                         ),
                         Posting(
-                            account="Assets:Checking",
-                            units=Amount(-transaction.amount if transaction.amount > 0 else transaction.amount, transaction.iso_currency_code),
+                            account="Assets:Transfer",
+                            units=Amount(transaction.amount, transaction.iso_currency_code),
                             cost=None,
                             price=None,
                             flag=None,
                             meta=None,
                         ),
                     ],
+                    **transaction_common_info
                 )
+        else:
+            logger.error(f"Unknown transaction type: {transaction.type.type} - {transaction.type.subtype}")
+            raise ValueError(f"Unknown transaction type: {transaction.type.type} - {transaction.type.subtype}")
 
-        raise ValueError(f"Unknown transaction type: {transaction.type.type} - {transaction.type.subtype}")
+        

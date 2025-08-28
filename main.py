@@ -312,7 +312,7 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
             # Get investment transactions
             request = InvestmentsTransactionsGetRequest(
                 access_token=access_token,
-                start_date=date(2010, 1, 1),
+                start_date=date(2025, 1, 1),
                 end_date=date.today()
             )
             response = client.investments_transactions_get(request)
@@ -686,7 +686,8 @@ def main():
 
     if args.sync_transactions:
         # Fetch transactions
-        transactions, cursor_directives = _update_transactions(client, args.root_file, args.debug)
+        # transactions, cursor_directives = _update_transactions(client, args.root_file, args.debug)
+        transactions, cursor_directives = ([],[])
         investment_transactions = _update_investments(client, args.root_file)
         
         # Generate Beancount entries
@@ -703,12 +704,18 @@ def main():
                 logger.debug(f"Processing entry: {entry}")
                 account = entry.postings[0].account
                 # Find the corresponding Account object for this beancount account name
-                matching_account = next((t.account for t in transactions + investment_transactions 
+                # First check for exact match, then for substring (i.e. prefer Assets:Investments:Brokerage:Cash over Assets:Investments:Brokerage)
+                exact_matching_account = next((t.account for t in transactions + investment_transactions 
                                       if t.account.beancount_name == account), None)
+                if not exact_matching_account:
+                    matching_account = next((t.account for t in transactions + investment_transactions 
+                                      if t.account.beancount_name in account), None)
                 if matching_account and matching_account.transaction_file:
                     if matching_account.transaction_file not in account_entries:
                         account_entries[matching_account.transaction_file] = []
                     account_entries[matching_account.transaction_file].append(entry)
+                else:
+                    logger.warning(f"No matching account found for {entry}")
             else:
                 logger.debug(f"Skipping entry: {entry}")
                 logger.debug(f"Entry type: {type(entry)}")
