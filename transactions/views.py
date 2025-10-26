@@ -4,6 +4,8 @@ from django.views.decorators.csrf import csrf_exempt
 from beancount import loader, core
 import plaid
 from plaid.api import plaid_api
+from plaid.configuration import Configuration, Environment
+from plaid.api_client import ApiClient
 
 from .models import PlaidItem, Account, FinanceCategory, PlaidTransaction, PlaidInvestmentTransaction, PlaidSecurity, PlaidInvestmentTransactionType
 from .forms import TransactionFilterForm
@@ -182,15 +184,15 @@ def update_transactions(request):
         secret = config["PLAID"]["secret"]
         
         
-        configuration = plaid.Configuration(
-            host=plaid.Environment.Production,
+        configuration = Configuration(
+            host=Environment.Production,
             api_key={
                 "clientId": client_id,
                 "secret": secret,
             },
         )
 
-        api_client = plaid.ApiClient(configuration)
+        api_client = ApiClient(configuration)
         client = plaid_api.PlaidApi(api_client)
         
         new_transactions = fetch_transactions(client)

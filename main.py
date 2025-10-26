@@ -7,14 +7,39 @@ import time
 from typing import Dict, List, Optional, Tuple
 import logging
 import tempfile
+import webbrowser
+import threading
 
 import plaid
 from plaid.api import plaid_api
-from plaid.model.accounts_get_request import AccountsGetRequest
-from plaid.model.transactions_sync_request import TransactionsSyncRequest
-from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
-from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions
-from plaid.model.plaid_error import PlaidError
+from plaid.configuration import Configuration, Environment
+from plaid.api_client import ApiClient
+
+try:
+    from plaid.model.accounts_get_request import AccountsGetRequest
+    from plaid.model.transactions_sync_request import TransactionsSyncRequest
+    from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
+    from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions
+    from plaid.model.plaid_error import PlaidError
+    from plaid.model.link_token_create_request import LinkTokenCreateRequest
+    from plaid.model.link_token_create_request_update import LinkTokenCreateRequestUpdate
+    from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+    from plaid.model.products import Products
+    from plaid.model.country_code import CountryCode
+except ImportError:
+    # Newer SDK uses different import paths
+    from plaid.models import AccountsGetRequest
+    from plaid.models import TransactionsSyncRequest
+    from plaid.models import InvestmentsTransactionsGetRequest
+    from plaid.models import InvestmentsTransactionsGetRequestOptions
+    from plaid.models import PlaidError
+    from plaid.models import LinkTokenCreateRequest
+    from plaid.models import LinkTokenCreateRequestUpdate
+    from plaid.models import ItemPublicTokenExchangeRequest
+    from plaid.models import Products
+    from plaid.models import CountryCode
+
+from flask import Flask, request, render_template_string, jsonify
 
 from beancount.core import data
 from beancount.core.data import Custom, Directive, Open
@@ -50,6 +75,13 @@ def _parse_args_and_load_config():
         "-r",
         action="store_true",
         help="re-categorize existing transactions based on current categorization rules",
+    )
+
+    parser.add_argument(
+        "--update-permissions",
+        "-u",
+        action="store_true",
+        help="update Plaid item permissions via web interface",
     )
 
     parser.add_argument(
@@ -394,6 +426,194 @@ def _skip_duplicate_transactions(transactions: List[PlaidTransaction], existing_
     return unique_transactions
 
 
+def _get_plaid_items_from_beancount(root_file: str) -> Dict[str, Tuple[str, str, str]]:
+    """Extract Plaid items from beancount file.
+
+    Returns:
+        Dict mapping item_id to (account_name, access_token, short_name)
+    """
+    entries, _, _ = loader.load_file(root_file)
+    accounts = [entry for entry in entries if isinstance(entry, Open)]
+
+    items = {}
+    for account in accounts:
+        if "plaid_item_id" in account.meta and "plaid_access_token" in account.meta:
+            item_id = account.meta["plaid_item_id"]
+            access_token = account.meta["plaid_access_token"]
+            short_name = account.meta.get("short_name", account.account)
+            items[item_id] = (account.account, access_token, short_name)
+
+    return items
+
+
+def _update_access_token_in_beancount(root_file: str, account_name: str, new_access_token: str):
+    """Update the access token for an account in the beancount file."""
+    with open(root_file, 'r') as f:
+        lines = f.readlines()
+
+    new_lines = []
+    in_account = False
+    account_indent = ""
+
+    for line in lines:
+        # Check if this line opens the account we're looking for
+        if f"open {account_name}" in line:
+            in_account = True
+            new_lines.append(line)
+            # Determine the indentation used for metadata
+            account_indent = "  "
+        elif in_account:
+            # Check if we're still in the account's metadata section
+            if line.strip() and not line.startswith(account_indent) and not line.startswith("  "):
+                # We've left the account section
+                in_account = False
+                new_lines.append(line)
+            elif "plaid_access_token:" in line:
+                # Replace the access token
+                new_lines.append(f'{account_indent}plaid_access_token: "{new_access_token}"\n')
+            else:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+
+    with open(root_file, 'w') as f:
+        f.writelines(new_lines)
+
+    logger.info(f"Updated access token for {account_name} in {root_file}")
+
+
+def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str, item_id: str,
+                                     account_name: str, access_token: str, short_name: str):
+    """Start Flask server for updating Plaid item permissions."""
+
+    # HTML template for the update page
+    HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Update Plaid Permissions</title>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Update Plaid Permissions</h1>
+    <p>Update permissions for: <strong>{{ short_name }}</strong> ({{ account_name }})</p>
+    <div id="status"></div>
+    <button id="link-button">Update Permissions</button>
+
+    <script>
+        const handler = Plaid.create({
+            token: '{{ link_token }}',
+            onSuccess: async (public_token, metadata) => {
+                document.getElementById('status').innerHTML = 'Updating access token...';
+                try {
+                    const response = await fetch('/exchange_token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ public_token: public_token })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        document.getElementById('status').className = 'success';
+                        document.getElementById('status').innerHTML = 'Successfully updated permissions! You can close this window.';
+                        document.getElementById('link-button').style.display = 'none';
+                    } else {
+                        document.getElementById('status').className = 'error';
+                        document.getElementById('status').innerHTML = 'Error: ' + result.error;
+                    }
+                } catch (error) {
+                    document.getElementById('status').className = 'error';
+                    document.getElementById('status').innerHTML = 'Error: ' + error;
+                }
+            },
+            onExit: (err, metadata) => {
+                if (err != null) {
+                    document.getElementById('status').className = 'error';
+                    document.getElementById('status').innerHTML = 'Error: ' + err.error_message;
+                }
+            }
+        });
+
+        document.getElementById('link-button').onclick = () => {
+            document.getElementById('status').innerHTML = '';
+            handler.open();
+        };
+    </script>
+</body>
+</html>
+    """
+
+    app = Flask(__name__)
+    app.logger.setLevel(logging.ERROR)  # Suppress Flask logs
+
+    # Create link token for update mode
+    try:
+        link_request = LinkTokenCreateRequest(
+            user={"client_user_id": "user-id"},
+            client_name="Plaid2Beancount",
+            products=[Products("transactions")],
+            country_codes=[CountryCode("US")],
+            language="en",
+            access_token=access_token,
+            update=LinkTokenCreateRequestUpdate(
+                account_selection_enabled=False
+            )
+        )
+        link_response = client.link_token_create(link_request)
+        link_token = link_response["link_token"]
+    except Exception as e:
+        logger.error(f"Error creating link token: {e}")
+        return
+
+    @app.route('/')
+    def index():
+        return render_template_string(
+            HTML_TEMPLATE,
+            short_name=short_name,
+            account_name=account_name,
+            link_token=link_token
+        )
+
+    @app.route('/exchange_token', methods=['POST'])
+    def exchange_token():
+        data = request.get_json()
+        public_token = data.get('public_token')
+
+        try:
+            # Exchange public token for access token
+            exchange_request = ItemPublicTokenExchangeRequest(
+                public_token=public_token
+            )
+            exchange_response = client.item_public_token_exchange(exchange_request)
+            new_access_token = exchange_response["access_token"]
+
+            # Update the beancount file
+            _update_access_token_in_beancount(root_file, account_name, new_access_token)
+
+            logger.info(f"Successfully updated access token for {short_name}")
+            return jsonify({"success": True})
+        except Exception as e:
+            logger.error(f"Error exchanging token: {e}")
+            return jsonify({"success": False, "error": str(e)})
+
+    # Open browser automatically
+    def open_browser():
+        time.sleep(1)
+        webbrowser.open('http://localhost:5000')
+
+    threading.Thread(target=open_browser, daemon=True).start()
+
+    # Run the server
+    logger.info("Starting webserver at http://localhost:5000")
+    logger.info("Press Ctrl+C to stop the server after completing the update")
+    app.run(port=5000, debug=False)
+
+
 def _recategorize_transactions(root_file: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> int:
     """Re-categorize existing transactions based on current categorization rules."""
     # Load current categorization rules
@@ -672,17 +892,65 @@ def main():
     # Load config
     config = configparser.ConfigParser()
     config.read(os.path.expanduser(args.config_file))
-    
+
     # Initialize Plaid client
-    configuration = plaid.Configuration(
-        host=plaid.Environment.Production,
+    configuration = Configuration(
+        host=Environment.Production,
         api_key={
             "clientId": config["PLAID"]["client_id"],
             "secret": config["PLAID"]["secret"],
         },
     )
-    api_client = plaid.ApiClient(configuration)
+    api_client = ApiClient(configuration)
     client = plaid_api.PlaidApi(api_client)
+
+    if args.update_permissions:
+        # Extract all Plaid items from beancount file
+        items = _get_plaid_items_from_beancount(args.root_file)
+
+        if not items:
+            logger.error("No Plaid items found in beancount file.")
+            logger.error("Make sure your account Open directives have both 'plaid_item_id' and 'plaid_access_token' metadata.")
+            return
+
+        # Display available items
+        print("\nAvailable Plaid items:")
+        print("-" * 50)
+        item_list = list(items.items())
+        for i, (item_id, (account_name, _, short_name)) in enumerate(item_list, 1):
+            print(f"{i}. {short_name} ({account_name})")
+            print(f"   Item ID: {item_id}")
+
+        # Get user selection
+        print("-" * 50)
+        while True:
+            try:
+                selection = input("\nSelect an item to update (enter number): ").strip()
+                index = int(selection) - 1
+                if 0 <= index < len(item_list):
+                    break
+                else:
+                    print(f"Please enter a number between 1 and {len(item_list)}")
+            except ValueError:
+                print("Please enter a valid number")
+            except KeyboardInterrupt:
+                print("\nCancelled")
+                return
+
+        # Get selected item details
+        selected_item_id, (account_name, access_token, short_name) = item_list[index]
+        print(f"\nStarting permission update for: {short_name}")
+
+        # Start the webserver
+        _start_update_permissions_server(
+            client,
+            args.root_file,
+            selected_item_id,
+            account_name,
+            access_token,
+            short_name
+        )
+        return
 
     if args.sync_transactions:
         # Fetch transactions

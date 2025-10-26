@@ -4,7 +4,13 @@ import configparser
 from transactions.models import FinanceCategory, PlaidItem, Account
 import plaid
 from plaid.api import plaid_api
-from plaid.model.transactions_sync_request import TransactionsSyncRequest
+from plaid.configuration import Configuration, Environment
+from plaid.api_client import ApiClient
+
+try:
+    from plaid.model.transactions_sync_request import TransactionsSyncRequest
+except ImportError:
+    from plaid.models import TransactionsSyncRequest
 
 class Command(AccountsCommand):
     help = 'Pull transactions from Plaid and load them into the database'
@@ -174,15 +180,15 @@ class Command(AccountsCommand):
                     account.beancount_name = beancount_account
                     account.save()
 
-        configuration = plaid.Configuration(
-            host=plaid.Environment.Production,
+        configuration = Configuration(
+            host=Environment.Production,
             api_key={
                 "clientId": client_id,
                 "secret": secret,
             },
         )
 
-        api_client = plaid.ApiClient(configuration)
+        api_client = ApiClient(configuration)
         client = plaid_api.PlaidApi(api_client)
 
     
