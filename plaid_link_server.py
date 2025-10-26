@@ -3,6 +3,7 @@ import plaid
 from plaid.api import plaid_api
 from plaid.configuration import Configuration, Environment
 from plaid.api_client import ApiClient
+from plaid.exceptions import ApiException
 
 try:
     from plaid.model.country_code import CountryCode
@@ -206,7 +207,7 @@ def index():
                     access_token=access_token
                 )
                 client.accounts_get(accounts_request)
-            except plaid.ApiException as e:
+            except ApiException as e:
                 if e.status == 400 and "ITEM_LOGIN_REQUIRED" in str(e):
                     items_needing_auth.append({
                         "item_id": item_id,

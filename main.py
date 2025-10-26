@@ -14,6 +14,7 @@ import plaid
 from plaid.api import plaid_api
 from plaid.configuration import Configuration, Environment
 from plaid.api_client import ApiClient
+from plaid.exceptions import ApiException
 
 try:
     from plaid.model.accounts_get_request import AccountsGetRequest
@@ -82,6 +83,13 @@ def _parse_args_and_load_config():
         "-u",
         action="store_true",
         help="update Plaid item permissions via web interface",
+    )
+
+    parser.add_argument(
+        "--show-accounts",
+        "-a",
+        action="store_true",
+        help="show Plaid account information for a selected item",
     )
 
     parser.add_argument(
@@ -234,7 +242,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                 acc["account_id"]: acc["type"]
                 for acc in accounts_response["accounts"]
             }
-        except plaid.ApiException as e:
+        except ApiException as e:
             if e.status == 400 and "ITEM_LOGIN_REQUIRED" in str(e):
                 logger.error(f"Item {item_id} needs reauthorization. Please use Plaid Link to update it.")
             else:
@@ -325,7 +333,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                     # Remove any existing cursor directives for this item_id
                     cursor_directives = [d for d in cursor_directives if d.values[2][0] != item_id]
                     cursor_directives.append(cursor_directive)
-            except plaid.ApiException as e:
+            except ApiException as e:
                 logger.error(f"Error fetching transactions for item {item_id}: {e}")
                 continue
             if debug:
@@ -399,7 +407,7 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
                         account=account
                     )
                 )
-        except plaid.ApiException as e:
+        except ApiException as e:
             logger.warning(f"Error getting investment transactions for item {item_id}: {e}")
             continue
     
@@ -612,6 +620,80 @@ def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str,
     logger.info("Starting webserver at http://localhost:5000")
     logger.info("Press Ctrl+C to stop the server after completing the update")
     app.run(port=5000, debug=False)
+
+
+def _display_account_info(client: plaid_api.PlaidApi, item_id: str, access_token: str, short_name: str):
+    """Fetch and display Plaid account information for an item."""
+    try:
+        # Get account information
+        accounts_request = AccountsGetRequest(access_token=access_token)
+        accounts_response = client.accounts_get(accounts_request)
+
+        print(f"\n{'='*80}")
+        print(f"Account Information for: {short_name}")
+        print(f"Item ID: {item_id}")
+        print(f"{'='*80}\n")
+
+        if not accounts_response["accounts"]:
+            print("No accounts found for this item.")
+            return
+
+        for i, account in enumerate(accounts_response["accounts"], 1):
+            print(f"Account {i}:")
+            print(f"  Name:            {account.get('name', 'N/A')}")
+            print(f"  Official Name:   {account.get('official_name', 'N/A')}")
+            print(f"  Account ID:      {account.get('account_id', 'N/A')}")
+            print(f"  Type:            {account.get('type', 'N/A')}")
+            print(f"  Subtype:         {account.get('subtype', 'N/A')}")
+
+            # Display balance information
+            balances = account.get('balances', {})
+            if balances:
+                print(f"  Balances:")
+                if balances.get('current') is not None:
+                    currency = balances.get('iso_currency_code', 'USD')
+                    print(f"    Current:       {balances['current']} {currency}")
+                if balances.get('available') is not None:
+                    currency = balances.get('iso_currency_code', 'USD')
+                    print(f"    Available:     {balances['available']} {currency}")
+                if balances.get('limit') is not None:
+                    currency = balances.get('iso_currency_code', 'USD')
+                    print(f"    Limit:         {balances['limit']} {currency}")
+
+            # Display mask (last 4 digits)
+            if account.get('mask'):
+                print(f"  Mask:            ****{account['mask']}")
+
+            print()
+
+        # Display item information
+        item = accounts_response.get("item", {})
+        if item:
+            print(f"Item Information:")
+            print(f"  Institution ID:  {item.get('institution_id', 'N/A')}")
+
+            # Convert Products objects to strings
+            available_products = item.get('available_products', [])
+            available_products_str = ', '.join([str(p) for p in available_products]) if available_products else 'None'
+            print(f"  Available Products: {available_products_str}")
+
+            billed_products = item.get('billed_products', [])
+            billed_products_str = ', '.join([str(p) for p in billed_products]) if billed_products else 'None'
+            print(f"  Billed Products:    {billed_products_str}")
+
+            if item.get('update_type'):
+                print(f"  Update Type:     {item['update_type']}")
+            print()
+
+        print(f"{'='*80}\n")
+
+    except ApiException as e:
+        if e.status == 400 and "ITEM_LOGIN_REQUIRED" in str(e):
+            logger.error(f"Item {item_id} needs reauthorization. Please use --update-permissions to update it.")
+        else:
+            logger.error(f"Error getting account information for item {item_id}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error getting account information: {e}")
 
 
 def _recategorize_transactions(root_file: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> int:
@@ -950,6 +1032,44 @@ def main():
             access_token,
             short_name
         )
+        return
+
+    if args.show_accounts:
+        # Extract all Plaid items from beancount file
+        items = _get_plaid_items_from_beancount(args.root_file)
+
+        if not items:
+            logger.error("No Plaid items found in beancount file.")
+            logger.error("Make sure your account Open directives have both 'plaid_item_id' and 'plaid_access_token' metadata.")
+            return
+
+        # Display available items
+        print("\nAvailable Plaid items:")
+        print("-" * 50)
+        item_list = list(items.items())
+        for i, (item_id, (account_name, _, short_name)) in enumerate(item_list, 1):
+            print(f"{i}. {short_name} ({account_name})")
+            print(f"   Item ID: {item_id}")
+
+        # Get user selection
+        print("-" * 50)
+        while True:
+            try:
+                selection = input("\nSelect an item to view accounts (enter number): ").strip()
+                index = int(selection) - 1
+                if 0 <= index < len(item_list):
+                    break
+                else:
+                    print(f"Please enter a number between 1 and {len(item_list)}")
+            except ValueError:
+                print("Please enter a valid number")
+            except KeyboardInterrupt:
+                print("\nCancelled")
+                return
+
+        # Get selected item details and display account info
+        selected_item_id, (account_name, access_token, short_name) = item_list[index]
+        _display_account_info(client, selected_item_id, access_token, short_name)
         return
 
     if args.sync_transactions:

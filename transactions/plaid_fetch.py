@@ -1,5 +1,6 @@
 import plaid
 from plaid.api import plaid_api
+from plaid.exceptions import ApiException
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
 from plaid.model.investments_transactions_get_request_options import (
@@ -33,7 +34,7 @@ def fetch_investments(client: plaid_api.PlaidApi, start_date=None, end_date=None
             securities = {
                 security["security_id"]: security for security in response["securities"]
             }
-        except plaid.ApiException as e:
+        except ApiException as e:
             print(e)
             print(
                 "Error getting investment transactions for item {0}".format(
@@ -201,7 +202,7 @@ def fetch_transactions(client: plaid_api.PlaidApi):
                     account.last_updated = datetime.datetime.now()
                     account.save()
                 print("No more transactions to sync for item {0}".format(item.item_id))
-        except plaid.ApiException as e:
+        except ApiException as e:
             print(e)
             print(
                 "Error getting transactions for item {0}".format(
