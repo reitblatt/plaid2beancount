@@ -2,8 +2,9 @@ from decimal import Decimal
 from typing import List
 import sys
 import os
+# Import from parent directory's transaction_models.py module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from models import PlaidTransaction, PlaidInvestmentTransaction
+from transaction_models import PlaidTransaction, PlaidInvestmentTransaction
 from beancount.core.data import Transaction, Amount, Posting, Price, Balance, CostSpec
 from beancount.parser.printer import EntryPrinter
 import logging

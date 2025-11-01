@@ -44,9 +44,5 @@ dependencies = {file = ["requirements.txt"]}
 plaid2beancount = "main:main"
 
 [tool.setuptools]
-py-modules = ["main", "plaid_models", "models"]
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["*"]
-exclude = ["tests*", "*.tests*"] 
+py-modules = ["main", "plaid_models", "plaid_link_server", "transaction_models"]
+packages = ["transactions"] 
