@@ -5,13 +5,20 @@ from datetime import date
 from enum import Enum
 
 # Add the project root to the Python path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
 
-from transactions import (
-    PlaidInvestmentTransaction, PlaidSecurity, PlaidInvestmentTransactionType,
-    Account, PlaidItem
+# Import the standalone transaction models (from transaction_models.py in root)
+from transaction_models import (
+    PlaidInvestmentTransaction,
+    PlaidSecurity,
+    PlaidInvestmentTransactionType,
+    Account,
+    PlaidItem
 )
-from beancount_renderer import BeancountRenderer
+
+# Import from the transactions package
+from transactions.beancount_renderer import BeancountRenderer
 
 
 class MockTransactionType(Enum):
