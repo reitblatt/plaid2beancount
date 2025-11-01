@@ -267,7 +267,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                 request = TransactionsSyncRequest(
                     access_token=access_token,
                     cursor=cursor,
-                    count=100,
+                    count=500,
                 )
 
                 response = client.transactions_sync(request)
