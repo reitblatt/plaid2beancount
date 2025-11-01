@@ -21,14 +21,34 @@ A Python CLI tool that syncs financial transactions from the Plaid API to Beanco
 
 ## Installation
 
-1. Clone this repository
-2. Install dependencies:
+1. Clone this repository:
+
+```bash
+git clone <repository-url>
+cd plaid2beancount
+```
+
+2. Create and activate a virtual environment:
+
+```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+# On macOS/Linux:
+source venv/bin/activate
+
+# On Windows:
+venv\Scripts\activate
+```
+
+3. Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Create a configuration file at `~/.config/plaid2text/config`:
+4. Create a configuration file at `~/.config/plaid2text/config`:
 
 ```ini
 [PLAID]
@@ -77,6 +97,11 @@ include "plaid_cursors.beancount"
 The tool automatically manages sync cursors in this file to enable incremental updates.
 
 ## Usage
+
+**Note:** Make sure to activate your virtual environment before running any commands:
+```bash
+source venv/bin/activate  # macOS/Linux
+```
 
 ### Sync Transactions
 
@@ -235,6 +260,19 @@ Transactions without matching categorization rules go to `Expenses:Unknown`. Add
 
 ## Development
 
+### Virtual Environment
+
+Always activate the virtual environment before running commands:
+
+```bash
+# Activate
+source venv/bin/activate  # macOS/Linux
+venv\Scripts\activate     # Windows
+
+# Deactivate when done
+deactivate
+```
+
 ### Running Tests
 
 ```bash
@@ -254,6 +292,16 @@ python main.py --sync-transactions --root-file path/to/root.beancount --debug
 This:
 - Enables verbose logging
 - Fetches only the first batch of transactions (avoids hitting rate limits during testing)
+
+### Installing Development Dependencies
+
+If you need additional development tools (linting, type checking):
+
+```bash
+pip install -e ".[dev]"
+```
+
+This installs the optional dev dependencies defined in `pyproject.toml`.
 
 ## License
 
