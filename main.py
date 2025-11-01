@@ -1099,17 +1099,28 @@ def main():
         # Group transactions by account
         account_entries = {}
         for entry in entries:
-            # Get the first posting's account to determine which file to write to
+            # Check all postings to determine which file to write to
             if isinstance(entry, data.Transaction) and entry.postings:
                 logger.debug(f"Processing entry: {entry}")
-                account = entry.postings[0].account
-                # Find the corresponding Account object for this beancount account name
-                # First check for exact match, then for substring (i.e. prefer Assets:Investments:Brokerage:Cash over Assets:Investments:Brokerage)
-                matching_account = next((t.account for t in transactions + investment_transactions 
-                                      if t.account.beancount_name == account), None)
-                if not matching_account:
-                    matching_account = next((t.account for t in transactions + investment_transactions 
-                                      if t.account.beancount_name in account), None)
+                matching_account = None
+
+                # Try to find a matching account by checking all postings
+                for posting in entry.postings:
+                    account = posting.account
+                    # Find the corresponding Account object for this beancount account name
+                    # First check for exact match
+                    matching_account = next((t.account for t in transactions + investment_transactions
+                                          if t.account.beancount_name == account), None)
+                    if matching_account:
+                        break
+
+                    # Then check if the transaction account is a prefix of the posting account
+                    # (e.g., Assets:Vanguard:Brokerage matches Assets:Vanguard:Brokerage:Cash)
+                    matching_account = next((t.account for t in transactions + investment_transactions
+                                          if account.startswith(t.account.beancount_name + ":")), None)
+                    if matching_account:
+                        break
+
                 if matching_account and matching_account.transaction_file:
                     if matching_account.transaction_file not in account_entries:
                         account_entries[matching_account.transaction_file] = []

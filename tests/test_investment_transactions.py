@@ -107,12 +107,12 @@ def test_dividend_fee_type():
     renderer = BeancountRenderer([], [transaction])
     beancount_tx = renderer._to_investment_beancount(transaction)
 
-    # Check that dividend account is Income:Vanguard:Brokerage:Dividends:VTSAX
+    # Check that dividend account is Income:Vanguard:Brokerage:VTSAX:Dividends
     assert len(beancount_tx.postings) == 2
     dividend_posting = beancount_tx.postings[0]
     cash_posting = beancount_tx.postings[1]
 
-    assert dividend_posting.account == "Income:Vanguard:Brokerage:Dividends:VTSAX"
+    assert dividend_posting.account == "Income:Vanguard:Brokerage:VTSAX:Dividends"
     assert dividend_posting.units.number == Decimal("50.00")
     assert dividend_posting.units.currency == "USD"
 
@@ -144,12 +144,12 @@ def test_dividend_cash_type():
     renderer = BeancountRenderer([], [transaction])
     beancount_tx = renderer._to_investment_beancount(transaction)
 
-    # Check that dividend account is Income:Vanguard:Brokerage:Dividends:VTI
+    # Check that dividend account is Income:Vanguard:Brokerage:VTI:Dividends
     assert len(beancount_tx.postings) == 2
     dividend_posting = beancount_tx.postings[0]
     cash_posting = beancount_tx.postings[1]
 
-    assert dividend_posting.account == "Income:Vanguard:Brokerage:Dividends:VTI"
+    assert dividend_posting.account == "Income:Vanguard:Brokerage:VTI:Dividends"
     assert dividend_posting.units.number == Decimal("125.50")
     assert dividend_posting.units.currency == "USD"
 
@@ -372,7 +372,7 @@ def test_multiple_dividend_tickers():
         beancount_tx = renderer._to_investment_beancount(transactions[i])
         dividend_posting = beancount_tx.postings[0]
 
-        expected_account = f"Income:Vanguard:Brokerage:Dividends:{ticker}"
+        expected_account = f"Income:Vanguard:Brokerage:{ticker}:Dividends"
         assert dividend_posting.account == expected_account, \
             f"Expected {expected_account}, got {dividend_posting.account}"
 
@@ -380,9 +380,9 @@ def test_multiple_dividend_tickers():
 def test_multiple_account_structures():
     """Test that dividend accounts work with different account structures."""
     test_cases = [
-        ("Assets:Investments:Vanguard", "Income:Investments:Vanguard:Dividends:VTSAX"),
-        ("Assets:Brokerage:Fidelity:401k", "Income:Brokerage:Fidelity:401k:Dividends:VTSAX"),
-        ("Assets:Retirement:IRA", "Income:Retirement:IRA:Dividends:VTSAX"),
+        ("Assets:Investments:Vanguard", "Income:Investments:Vanguard:VTSAX:Dividends"),
+        ("Assets:Brokerage:Fidelity:401k", "Income:Brokerage:Fidelity:401k:VTSAX:Dividends"),
+        ("Assets:Retirement:IRA", "Income:Retirement:IRA:VTSAX:Dividends"),
     ]
 
     for account_name, expected_dividend_account in test_cases:

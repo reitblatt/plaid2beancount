@@ -101,10 +101,10 @@ class BeancountRenderer:
         elif transaction.type.type.value == 'fee':
             if transaction.type.subtype.value == 'dividend':
                 source_posting = Posting(
-                    account.replace("Assets", "Income") + ":Dividends:" + ticker, Amount(transaction.amount, "USD"), None, None, None, None
+                    account.replace("Assets", "Income") + ":" + ticker + ":Dividends", Amount(transaction.amount, "USD"), None, None, None, None
                 )
                 sink_posting = Posting(
-                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None    
+                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
                 )
         
             # This is really a sweep out
@@ -143,7 +143,7 @@ class BeancountRenderer:
                     )
             elif transaction.type.subtype.value == 'dividend':
                 source_posting = Posting(
-                    account.replace("Assets", "Income") + ":Dividends:" + ticker, Amount(transaction.amount, "USD"), None, None, None, None
+                    account.replace("Assets", "Income") + ":" + ticker + ":Dividends", Amount(transaction.amount, "USD"), None, None, None, None
                 )
                 sink_posting = Posting(
                     account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None

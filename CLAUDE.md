@@ -133,11 +133,13 @@ Uses `plaid_transaction_id` metadata to detect duplicates. Also filters by date 
 Investment transactions have complex rendering logic based on `type` and `subtype`:
 - **buy**: Cash → Security
 - **sell**: Security → Cash (with capital gains posting)
-- **dividend**: Income:Dividends → Cash
+- **dividend**: Income:TICKER:Dividends → Cash (e.g., `Income:Vanguard:Brokerage:NVDA:Dividends`)
 - **transfer**: Used for sweep in/out between cash and money market funds
 - **fee**: Various fees or dividends (depending on subtype)
 
 Commodities are referenced by ticker symbol. Each account has sub-accounts like `Assets:Investments:Brokerage:Cash` and `Assets:Investments:Brokerage:VTSAX`.
+
+**Note:** Dividend accounts follow the structure `Income:{account_path}:{TICKER}:Dividends` where the ticker comes before "Dividends".
 
 ## Development Notes
 
