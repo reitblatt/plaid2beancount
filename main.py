@@ -249,6 +249,18 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                 logger.error(f"Error getting accounts for item {item_id}: {e}")
             continue
 
+        # Find any beancount account name associated with this item (for cursor storage)
+        # We need this in case the API returns no transactions
+        item_account_name = None
+        for account_id in accounts.keys():
+            if account_id in short_names:
+                item_account_name = short_names[account_id]
+                break
+
+        if not item_account_name:
+            logger.warning(f"No beancount account found for item {item_id}, skipping")
+            continue
+
         has_more = True
         while has_more:
             try:
@@ -321,21 +333,22 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                     )
                     transactions.append(transaction)
 
-                # Create cursor directive only when we have new transactions and a valid cursor
-                if plaid_transactions and cursor:
+                # Save cursor after every successful API call, even if no transactions returned
+                # This prevents re-requesting the same data and hitting rate limits
+                if cursor:
                     # Only create one cursor directive per item_id
                     cursor_directive = Custom(
                         date=date.today(),
                         meta={"plaid_transaction_id": f"cursor_{date.today()}"},
                         type="plaid_cursor",
-                        values=[(account.beancount_name, "string"), (cursor, "string"), (item_id, "string")]
+                        values=[(item_account_name, "string"), (cursor, "string"), (item_id, "string")]
                     )
                     # Remove any existing cursor directives for this item_id
                     cursor_directives = [d for d in cursor_directives if d.values[2][0] != item_id]
                     cursor_directives.append(cursor_directive)
             except ApiException as e:
                 logger.error(f"Error fetching transactions for item {item_id}: {e}")
-                continue
+                break
             if debug:
                 break  # Only retrieve the first batch of transactions in debug mode
     return transactions, cursor_directives
