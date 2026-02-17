@@ -487,4 +487,49 @@ def test_inline_modification_without_plaid_transaction_id():
         assert any('2024-01-12 * "DUNKIN"' in line for line in lines)
         
     finally:
-        shutil.rmtree(temp_dir) 
+        shutil.rmtree(temp_dir)
+
+def test_recategorize_interest_income():
+    """Transactions with INCOME_INTEREST_EARNED category should be recategorized to Income:{account}:Interest."""
+    root_content = '''
+2024-01-01 open Assets:Ally:Savings
+  plaid_account_id: "acc1"
+  transaction_file: "accounts/ally/savings.beancount"
+2024-01-01 open Expenses:Unknown
+2024-01-01 open Income:Ally:Savings:Interest
+
+include "accounts/ally/savings.beancount"
+'''
+    # Simulate a transaction previously written as Expenses:Unknown with the interest category in metadata
+    tx_content = '''
+2024-01-10 ! "Ally Bank" "Interest Payment"
+  plaid_transaction_id: "txn1"
+  plaid_category_detailed: "INCOME_INTEREST_EARNED"
+  Assets:Ally:Savings  1.50 USD
+  Expenses:Unknown  -1.50 USD
+'''
+    temp_dir = tempfile.mkdtemp()
+    try:
+        root_file = os.path.join(temp_dir, "root.beancount")
+        tx_dir = os.path.join(temp_dir, "accounts/ally")
+        os.makedirs(tx_dir)
+        tx_file = os.path.join(tx_dir, "savings.beancount")
+        with open(root_file, "w") as f:
+            f.write(root_content)
+        with open(tx_file, "w") as f:
+            f.write(tx_content)
+
+        recategorized_count = _recategorize_transactions(root_file)
+        assert recategorized_count == 1
+
+        entries, errors, options = loader.load_file(root_file)
+        assert not errors, f"Loader returned errors: {errors}"
+        found = False
+        for entry in entries:
+            if hasattr(entry, "postings"):
+                for posting in entry.postings:
+                    if posting.account == "Income:Ally:Savings:Interest":
+                        found = True
+        assert found, "Transaction was not recategorized to Income:Ally:Savings:Interest"
+    finally:
+        shutil.rmtree(temp_dir)

@@ -288,6 +288,10 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                     elif t["personal_finance_category"] is not None:
                         cat_data = t["personal_finance_category"]
                         expense_account = expense_accounts.get(cat_data["detailed"])
+                        if expense_account is None and cat_data.get("detailed") == "INCOME_INTEREST_EARNED":
+                            beancount_name = short_names.get(t["account_id"], "")
+                            if beancount_name.startswith("Assets:"):
+                                expense_account = "Income:" + beancount_name[len("Assets:"):] + ":Interest"
                     if t["personal_finance_category"] is not None:
                         cat_data = t["personal_finance_category"]
                         category = _get_or_create_category(
@@ -782,6 +786,13 @@ def _recategorize_transactions(root_file: str, start_date: Optional[str] = None,
                                 logger.debug(f"Found partial match: '{payee_lc}' in '{payee_rule}' -> {new_expense_account}")
                                 break
                 
+                # Auto-categorize interest income using stored category metadata
+                if new_expense_account is None and entry.meta.get("plaid_category_detailed") == "INCOME_INTEREST_EARNED":
+                    for posting in entry.postings:
+                        if posting.account.startswith("Assets:"):
+                            new_expense_account = "Income:" + posting.account[len("Assets:"):] + ":Interest"
+                            break
+
                 # If we found a new categorization, update the transaction
                 if new_expense_account and new_expense_account != expense_posting.account:
                     logger.debug(f"Recategorizing transaction from {expense_posting.account} to {new_expense_account}")

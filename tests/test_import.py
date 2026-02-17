@@ -64,6 +64,39 @@ def create_temp_beancount_file():
     os.makedirs(os.path.join(temp_dir, "accounts/checking"))
     return temp_dir, root_file
 
+class DummyPlaidApiInterest:
+    def accounts_get(self, request):
+        return {"accounts": [
+            {"account_id": "acc1", "type": "depository"},
+        ]}
+    def transactions_sync(self, request):
+        return {
+            "added": [
+                {
+                    "date": "2024-01-03",
+                    "name": "Interest Payment",
+                    "amount": -1.50,  # negative = money coming in
+                    "account_id": "acc1",
+                    "transaction_id": "txn3",
+                    "personal_finance_category": {"primary": "INCOME", "detailed": "INCOME_INTEREST_EARNED", "confidence_level": "VERY_HIGH"},
+                    "pending": False,
+                },
+            ],
+            "has_more": False,
+            "next_cursor": "cursor456"
+        }
+
+def test_interest_income_categorization():
+    temp_dir, root_file = create_temp_beancount_file()
+    try:
+        transactions, _ = _update_transactions(DummyPlaidApiInterest(), root_file, debug=True)
+        assert len(transactions) == 1
+        # Assets:Checking -> Income:Checking:Interest
+        assert transactions[0].personal_finance_category.expense_account == "Income:Checking:Interest"
+    finally:
+        shutil.rmtree(temp_dir)
+
+
 def test_import_transactions_and_categorization():
     temp_dir, root_file = create_temp_beancount_file()
     try:
