@@ -11,6 +11,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_TWO_PLACES = Decimal('0.01')
+
+def _usd(value: Decimal) -> Decimal:
+    """Ensure a USD total amount has at least 2 decimal places."""
+    if value.as_tuple().exponent > -2:
+        return value.quantize(_TWO_PLACES)
+    return value
+
 
 class BeancountRenderer:
     def __init__(self, transactions: List[PlaidTransaction], investment_transactions: List[PlaidInvestmentTransaction]):
@@ -51,11 +59,11 @@ class BeancountRenderer:
             links=set(),
             postings=[
                 Posting(
-                    account, Amount(-transaction.amount, transaction.currency), None, None, None, None
+                    account, Amount(_usd(-transaction.amount), transaction.currency), None, None, None, None
                 ),
                 Posting(
                     expense_account,
-                    Amount(transaction.amount, transaction.currency),
+                    Amount(_usd(transaction.amount), transaction.currency),
                     None,
                     None,
                     None,
@@ -80,7 +88,7 @@ class BeancountRenderer:
         # buy or sweep in
         if transaction.type.type.value == 'buy' or (transaction.type.type.value == 'fee' and transaction.type.subtype.value == 'miscellaneous fee'):            
             source_posting = Posting(
-                account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
             )
             # For some reason, dividends are not being recorded as a quantity
             quantity = transaction.quantity or transaction.amount
@@ -94,17 +102,17 @@ class BeancountRenderer:
                 account + ":" + ticker, Amount(-transaction.quantity, ticker), None, Amount(transaction.price, "USD"), None, None
             )
             sink_posting = Posting(
-                account + ":" + "Cash", Amount(transaction.amount, "USD"), None, None, None, None
+                account + ":" + "Cash", Amount(_usd(transaction.amount), "USD"), None, None, None, None
             )            
             gains_account = account.replace("Assets", "Income") + "Capital-Gains" + ticker
             
         elif transaction.type.type.value == 'fee':
             if transaction.type.subtype.value == 'dividend':
                 source_posting = Posting(
-                    account.replace("Assets", "Income") + ":" + ticker + ":Dividends", Amount(transaction.amount, "USD"), None, None, None, None
+                    account.replace("Assets", "Income") + ":" + ticker + ":Dividends", Amount(_usd(transaction.amount), "USD"), None, None, None, None
                 )
                 sink_posting = Posting(
-                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                    account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
                 )
         
             # This is really a sweep out
@@ -113,7 +121,7 @@ class BeancountRenderer:
                     account + ":" + ticker, Amount(transaction.amount, ticker), None, Amount(transaction.price, "USD"), None, None
                 )
                 sink_posting = Posting(
-                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None    
+                    account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None    
                 )                            
         elif transaction.type.type.value == 'cash':
             if transaction.type.subtype.value == 'deposit':
@@ -123,14 +131,14 @@ class BeancountRenderer:
                     )
                 else:
                     source_posting = Posting(
-                        "Assets:Transfer", Amount(transaction.amount, "USD"), None, None, None, None
+                        "Assets:Transfer", Amount(_usd(transaction.amount), "USD"), None, None, None, None
                     )
                 sink_posting = Posting(
-                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                    account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
                 )
             elif transaction.type.subtype.value == 'withdrawal':                
                 source_posting = Posting(
-                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                    account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
                 )
                 if transaction.name == 'Sweep in':
                     # For some reason, this is not being recorded as a quantity
@@ -139,21 +147,21 @@ class BeancountRenderer:
                     sink_posting = Posting(account + ":" + ticker, Amount(quantity, ticker), None, Amount(price, "USD"), None, None)
                 else:
                     sink_posting = Posting(
-                        "Assets:Transfer", Amount(transaction.amount, "USD"), None, None, None, None
+                        "Assets:Transfer", Amount(_usd(transaction.amount), "USD"), None, None, None, None
                     )
             elif transaction.type.subtype.value == 'dividend':
                 source_posting = Posting(
-                    account.replace("Assets", "Income") + ":" + ticker + ":Dividends", Amount(transaction.amount, "USD"), None, None, None, None
+                    account.replace("Assets", "Income") + ":" + ticker + ":Dividends", Amount(_usd(transaction.amount), "USD"), None, None, None, None
                 )
                 sink_posting = Posting(
-                    account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                    account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
                 )
         elif transaction.type.type.value == 'transfer':
             # At some point Vanguard started using the transfer type for sweep in/out...
             if transaction.type.subtype.value == 'transfer':
                 if transaction.name == 'Sweep in':
                     source_posting = Posting(
-                        account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None
+                        account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
                     )
                     # For some reason, this is not being recorded as a quantity
                     quantity = transaction.quantity or transaction.amount
@@ -167,7 +175,7 @@ class BeancountRenderer:
                         account + ":" + ticker, Amount(transaction.amount, ticker), None, Amount(transaction.price, "USD"), None, None
                     )
                     sink_posting = Posting(
-                        account + ":" + "Cash", Amount(-transaction.amount, "USD"), None, None, None, None    
+                        account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None    
                     )                   
                     
         if source_posting is None or sink_posting is None:
