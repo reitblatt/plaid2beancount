@@ -156,6 +156,14 @@ class BeancountRenderer:
                 sink_posting = Posting(
                     account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
                 )
+            elif transaction.type.subtype.value == 'contribution':
+                # External contribution into the account (amount is negative = cash inflow)
+                source_posting = Posting(
+                    "Assets:Transfer", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
+                )
+                sink_posting = Posting(
+                    account + ":" + "Cash", Amount(_usd(transaction.amount), "USD"), None, None, None, None
+                )
         elif transaction.type.type.value == 'transfer':
             # At some point Vanguard started using the transfer type for sweep in/out...
             if transaction.type.subtype.value == 'transfer':
