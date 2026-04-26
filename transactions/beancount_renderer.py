@@ -175,9 +175,26 @@ class BeancountRenderer:
                         account + ":" + ticker, Amount(transaction.amount, ticker), None, Amount(transaction.price, "USD"), None, None
                     )
                     sink_posting = Posting(
-                        account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None    
-                    )                   
-                    
+                        account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
+                    )
+                else:
+                    # Regular transfer in/out (e.g. "Transfer (Outgoing)", "Transfer (Incoming)")
+                    # Positive amount = outgoing (cash leaves account); negative = incoming
+                    if transaction.amount > 0:
+                        source_posting = Posting(
+                            account + ":" + "Cash", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
+                        )
+                        sink_posting = Posting(
+                            "Assets:Transfer", Amount(_usd(transaction.amount), "USD"), None, None, None, None
+                        )
+                    else:
+                        source_posting = Posting(
+                            "Assets:Transfer", Amount(_usd(-transaction.amount), "USD"), None, None, None, None
+                        )
+                        sink_posting = Posting(
+                            account + ":" + "Cash", Amount(_usd(transaction.amount), "USD"), None, None, None, None
+                        )
+
         if source_posting is None or sink_posting is None:
             print(transaction)
             raise ValueError(f"Unknown transaction type: {transaction.type.type} - {transaction.type.subtype}")

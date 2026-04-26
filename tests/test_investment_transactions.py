@@ -341,6 +341,78 @@ def test_transfer_type_sweep():
     assert security_posting.units.number == Decimal("750.00")
 
 
+def test_transfer_outgoing():
+    """Test transfer/transfer outgoing (e.g. 'Transfer (Outgoing)') routes cash to Assets:Transfer."""
+    security = create_test_security("VMFXX")
+    account = create_test_account()
+
+    transaction = PlaidInvestmentTransaction(
+        date=date(2026, 4, 2),
+        name="Transfer (Outgoing)",
+        quantity=Decimal("0"),
+        price=Decimal("1.0"),
+        amount=Decimal("4011.11"),
+        security=security,
+        fees=Decimal("0"),
+        cancel_transaction_id=None,
+        investment_transaction_id="transfer_out_001",
+        iso_currency_code="USD",
+        type=create_test_transaction_type('transfer', 'transfer'),
+        account=account
+    )
+
+    renderer = BeancountRenderer([], [transaction])
+    beancount_tx = renderer._to_investment_beancount(transaction)
+
+    assert len(beancount_tx.postings) == 2
+    cash_posting = beancount_tx.postings[0]
+    transfer_posting = beancount_tx.postings[1]
+
+    assert cash_posting.account == "Assets:Vanguard:Brokerage:Cash"
+    assert cash_posting.units.number == Decimal("-4011.11")
+    assert cash_posting.units.currency == "USD"
+
+    assert transfer_posting.account == "Assets:Transfer"
+    assert transfer_posting.units.number == Decimal("4011.11")
+    assert transfer_posting.units.currency == "USD"
+
+
+def test_transfer_incoming():
+    """Test transfer/transfer incoming routes Assets:Transfer to cash."""
+    security = create_test_security("VMFXX")
+    account = create_test_account()
+
+    transaction = PlaidInvestmentTransaction(
+        date=date(2026, 4, 2),
+        name="Transfer (Incoming)",
+        quantity=Decimal("0"),
+        price=Decimal("1.0"),
+        amount=Decimal("-2000.00"),
+        security=security,
+        fees=Decimal("0"),
+        cancel_transaction_id=None,
+        investment_transaction_id="transfer_in_001",
+        iso_currency_code="USD",
+        type=create_test_transaction_type('transfer', 'transfer'),
+        account=account
+    )
+
+    renderer = BeancountRenderer([], [transaction])
+    beancount_tx = renderer._to_investment_beancount(transaction)
+
+    assert len(beancount_tx.postings) == 2
+    transfer_posting = beancount_tx.postings[0]
+    cash_posting = beancount_tx.postings[1]
+
+    assert transfer_posting.account == "Assets:Transfer"
+    assert transfer_posting.units.number == Decimal("2000.00")
+    assert transfer_posting.units.currency == "USD"
+
+    assert cash_posting.account == "Assets:Vanguard:Brokerage:Cash"
+    assert cash_posting.units.number == Decimal("-2000.00")
+    assert cash_posting.units.currency == "USD"
+
+
 def test_multiple_dividend_tickers():
     """Test that dividends from different securities have different accounts."""
     tickers = ["VTSAX", "VTIAX", "VBTLX"]
