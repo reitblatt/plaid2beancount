@@ -1,7 +1,7 @@
 from . import AccountsCommand
 from beancount import loader, core
 import configparser
-from transactions.models import FinanceCategory, PlaidItem, Account
+from transactions.models import FinanceCategory, PlaidItem, Account, PlaidTransaction
 import plaid
 from plaid.api import plaid_api
 from plaid.configuration import Configuration, Environment
