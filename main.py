@@ -629,14 +629,14 @@ def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str,
     # Open browser automatically
     def open_browser():
         time.sleep(1)
-        webbrowser.open('http://localhost:5000')
+        webbrowser.open('http://127.0.0.1:5000')
 
     threading.Thread(target=open_browser, daemon=True).start()
 
     # Run the server
-    logger.info("Starting webserver at http://localhost:5000")
+    logger.info("Starting webserver at http://127.0.0.1:5000")
     logger.info("Press Ctrl+C to stop the server after completing the update")
-    app.run(port=5000, debug=False)
+    app.run(host='127.0.0.1', port=5000, debug=False)
 
 
 def _display_account_info(client: plaid_api.PlaidApi, item_id: str, access_token: str, short_name: str):
