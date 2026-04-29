@@ -49,6 +49,7 @@ from beancount.parser import parser
 from beancount import loader
 
 from plaid_models import PlaidTransaction, PlaidInvestmentTransaction, PlaidSecurity, PlaidInvestmentTransactionType, Account, FinanceCategory, PlaidItem, PlaidCursor
+from beancount_file_utils import store_institution_id_in_beancount
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -184,7 +185,8 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
         if "plaid_item_id" in account.meta and "plaid_access_token" in account.meta:
             item_id = account.meta["plaid_item_id"]
             access_token = account.meta["plaid_access_token"]
-            items[item_id] = access_token
+            institution_id = account.meta.get("plaid_institution_id")
+            items[item_id] = (access_token, institution_id)
     
     # Get cursors for each account
     cursors = {}
@@ -200,13 +202,14 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
     return short_names, expense_accounts, items, cursors, transaction_files
 
 
-def _get_or_create_item(item_id: str, name: str, access_token: str, cursor: Optional[str] = None) -> PlaidItem:
+def _get_or_create_item(item_id: str, name: str, access_token: str, cursor: Optional[str] = None, institution_id: Optional[str] = None) -> PlaidItem:
     """Create a PlaidItem with the given data."""
     return PlaidItem(
         name=name,
         item_id=item_id,
-            access_token=access_token,
-        cursor=cursor
+        access_token=access_token,
+        cursor=cursor,
+        institution_id=institution_id,
     )
 
 
@@ -226,14 +229,14 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
     cursor_directives = []
     short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
     
-    for item_id, access_token in items.items():
+    for item_id, (access_token, institution_id) in items.items():
         # Get cursor from account file
         cursor = ""
         for account_cursors in cursors.values():
             if item_id in account_cursors:
                 cursor = account_cursors[item_id]
                 break
-        
+
         # First, get account information
         try:
             accounts_request = AccountsGetRequest(access_token=access_token)
@@ -242,6 +245,11 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                 acc["account_id"]: acc["type"]
                 for acc in accounts_response["accounts"]
             }
+            # Persist institution_id the first time we see it
+            fresh_institution_id = accounts_response.get("item", {}).get("institution_id")
+            if fresh_institution_id and fresh_institution_id != institution_id:
+                store_institution_id_in_beancount(root_file, item_id, fresh_institution_id)
+                institution_id = fresh_institution_id
         except ApiException as e:
             if e.status == 400 and "ITEM_LOGIN_REQUIRED" in str(e):
                 logger.error(f"Item {item_id} needs reauthorization. Please use Plaid Link to update it.")
@@ -310,7 +318,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                         beancount_name=beancount_name,
                         plaid_id=t["account_id"],
                         transaction_file=transaction_files.get(beancount_name),
-                        item=_get_or_create_item(item_id, "Unknown", access_token, cursor),
+                        item=_get_or_create_item(item_id, "Unknown", access_token, cursor, institution_id),
                         type=accounts.get(t["account_id"], "Unknown")
                     )
 
@@ -364,7 +372,7 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
     short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
     
     investment_transactions = []
-    for item_id, access_token in items.items():
+    for item_id, (access_token, institution_id) in items.items():
         try:
             # Get investment transactions
             request = InvestmentsTransactionsGetRequest(
@@ -392,7 +400,7 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
                     beancount_name=beancount_name,
                     plaid_id=t["account_id"],
                     transaction_file=transaction_files.get(beancount_name),
-                    item=_get_or_create_item(item_id, "Unknown", access_token),
+                    item=_get_or_create_item(item_id, "Unknown", access_token, institution_id=institution_id),
                     type=accounts[t["account_id"]]["type"]
                 )
                 

@@ -19,6 +19,7 @@ class PlaidItem:
     item_id: str
     access_token: str
     cursor: Optional[str] = None
+    institution_id: Optional[str] = None
     
     def __str__(self):
         if self.name is not None:

@@ -15,11 +15,12 @@ class FinanceCategory:
 
 class PlaidItem:
     
-    def __init__(self, name: str, item_id: str, access_token: str, cursor: str) -> None:
+    def __init__(self, name: str, item_id: str, access_token: str, cursor: str = None, institution_id: str = None) -> None:
         self.name = name
         self.item_id = item_id
         self.access_token = access_token
-        self.cursor = cursor            
+        self.cursor = cursor
+        self.institution_id = institution_id            
     
     def __str__(self):
         if self.name is not None:
