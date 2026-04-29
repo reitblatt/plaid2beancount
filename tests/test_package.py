@@ -53,6 +53,26 @@ def test_import_plaid_models():
         raise AssertionError(f"Failed to import plaid_models: {e}")
 
 
+def test_import_beancount_file_utils():
+    """Test that beancount_file_utils module can be imported."""
+    try:
+        import beancount_file_utils
+        assert hasattr(beancount_file_utils, 'store_institution_id_in_beancount')
+    except ImportError as e:
+        raise AssertionError(f"Failed to import beancount_file_utils: {e}")
+
+
+def test_import_institutions_package():
+    """Test that transactions.institutions package and key classes can be imported."""
+    try:
+        from transactions.institutions.base import Institution, InvestmentKind
+        from transactions.institutions.vanguard import VanguardInstitution
+        from transactions.institutions.registry import get_institution
+        assert callable(get_institution)
+    except ImportError as e:
+        raise AssertionError(f"Failed to import transactions.institutions: {e}")
+
+
 def test_import_plaid_link_server():
     """Test that plaid_link_server module can be imported."""
     try:
