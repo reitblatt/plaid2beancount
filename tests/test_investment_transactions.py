@@ -819,3 +819,10 @@ class TestStoreInstitutionId:
         store_institution_id_in_beancount(path, "item_xyz", "ins_116527")
         content = open(path).read()
         assert content.count('plaid_institution_id: "ins_116527"') == 2
+
+    def test_no_match_does_not_modify_file(self):
+        original = "2020-01-01 open Assets:Other\n  plaid_item_id: \"other_item\"\n"
+        path = _write_temp_beancount(original)
+        original_content = open(path).read()
+        store_institution_id_in_beancount(path, "nonexistent_item", "ins_116527")
+        assert open(path).read() == original_content

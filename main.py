@@ -179,14 +179,17 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
                 file_path = f"accounts/{account_parts[1]}/{account_parts[2]}.beancount"
             transaction_files[account.account] = file_path
     
-    # Get item configurations
+    # Get item configurations.
+    # source_file is the actual beancount file that defines this account's open
+    # directive (may differ from root_file when include directives are used).
     items = {}
     for account in accounts:
         if "plaid_item_id" in account.meta and "plaid_access_token" in account.meta:
             item_id = account.meta["plaid_item_id"]
             access_token = account.meta["plaid_access_token"]
             institution_id = account.meta.get("plaid_institution_id")
-            items[item_id] = (access_token, institution_id)
+            source_file = account.meta.get("filename", file_path)
+            items[item_id] = (access_token, institution_id, source_file)
     
     # Get cursors for each account
     cursors = {}
@@ -229,7 +232,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
     cursor_directives = []
     short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
     
-    for item_id, (access_token, institution_id) in items.items():
+    for item_id, (access_token, institution_id, source_file) in items.items():
         # Get cursor from account file
         cursor = ""
         for account_cursors in cursors.values():
@@ -248,7 +251,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
             # Persist institution_id the first time we see it
             fresh_institution_id = accounts_response.get("item", {}).get("institution_id")
             if fresh_institution_id and fresh_institution_id != institution_id:
-                store_institution_id_in_beancount(root_file, item_id, fresh_institution_id)
+                store_institution_id_in_beancount(source_file, item_id, fresh_institution_id)
                 institution_id = fresh_institution_id
         except ApiException as e:
             if e.status == 400 and "ITEM_LOGIN_REQUIRED" in str(e):
@@ -372,7 +375,7 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
     short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
     
     investment_transactions = []
-    for item_id, (access_token, institution_id) in items.items():
+    for item_id, (access_token, institution_id, source_file) in items.items():
         try:
             # Get investment transactions
             request = InvestmentsTransactionsGetRequest(

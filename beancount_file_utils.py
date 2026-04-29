@@ -38,6 +38,13 @@ def store_institution_id_in_beancount(root_file: str, item_id: str, institution_
 
         i += 1
 
+    if len(new_lines) == len(lines):
+        logger.warning(
+            f"store_institution_id_in_beancount: no account with plaid_item_id "
+            f'"{item_id}" found in {root_file} — institution_id not written'
+        )
+        return
+
     with open(root_file, 'w') as f:
         f.writelines(new_lines)
 
