@@ -3,6 +3,7 @@ from decimal import Decimal
 import argparse
 import configparser
 import os
+import socket
 import time
 from typing import Dict, List, Optional, Tuple
 import logging
@@ -54,6 +55,19 @@ from beancount_file_utils import store_institution_id_in_beancount
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def _find_free_port(start: int = 5001) -> int:
+    """Return the first TCP port >= start that is not in use on localhost."""
+    port = start
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(('127.0.0.1', port))
+                return port
+            except OSError:
+                port += 1
+
 
 def _parse_args_and_load_config():
     defaults = {
@@ -637,17 +651,310 @@ def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str,
             logger.error(f"Error exchanging token: {e}")
             return jsonify({"success": False, "error": str(e)})
 
+    port = _find_free_port()
+
     # Open browser automatically
     def open_browser():
         time.sleep(1)
-        webbrowser.open('http://127.0.0.1:5000')
+        webbrowser.open(f'http://127.0.0.1:{port}')
 
     threading.Thread(target=open_browser, daemon=True).start()
 
     # Run the server
-    logger.info("Starting webserver at http://127.0.0.1:5000")
+    logger.info(f"Starting webserver at http://127.0.0.1:{port}")
     logger.info("Press Ctrl+C to stop the server after completing the update")
-    app.run(host='127.0.0.1', port=5000, debug=False)
+    app.run(host='127.0.0.1', port=port, debug=False)
+
+
+def _write_plaid_account_to_beancount(
+    root_file: str,
+    beancount_account: str,
+    plaid_account_id: str,
+    item_id: str,
+    access_token: str,
+    short_name: str,
+    transaction_file: str,
+    institution_id: Optional[str],
+    is_new: bool,
+):
+    """Write Plaid account metadata to a beancount file.
+
+    If is_new is True, append a fresh Open directive. Otherwise, insert the
+    plaid_* metadata fields immediately after the existing `open <account>` line.
+    """
+    today = date.today().strftime('%Y-%m-%d')
+
+    if is_new:
+        lines_to_append = [
+            f'\n{today} open {beancount_account}\n',
+            f'  plaid_account_id: "{plaid_account_id}"\n',
+            f'  plaid_item_id: "{item_id}"\n',
+            f'  plaid_access_token: "{access_token}"\n',
+            f'  transaction_file: "{transaction_file}"\n',
+            f'  short_name: "{short_name}"\n',
+        ]
+        if institution_id:
+            lines_to_append.append(f'  plaid_institution_id: "{institution_id}"\n')
+
+        with open(root_file, 'a') as f:
+            f.writelines(lines_to_append)
+        logger.info(f"Appended new Open directive for {beancount_account} in {root_file}")
+        return
+
+    # Existing account: insert metadata after the `open <account>` line
+    with open(root_file, 'r') as f:
+        lines = f.readlines()
+
+    new_lines = []
+    inserted = False
+    for line in lines:
+        new_lines.append(line)
+        if not inserted and f"open {beancount_account}" in line:
+            new_lines.append(f'  plaid_account_id: "{plaid_account_id}"\n')
+            new_lines.append(f'  plaid_item_id: "{item_id}"\n')
+            new_lines.append(f'  plaid_access_token: "{access_token}"\n')
+            new_lines.append(f'  transaction_file: "{transaction_file}"\n')
+            new_lines.append(f'  short_name: "{short_name}"\n')
+            if institution_id:
+                new_lines.append(f'  plaid_institution_id: "{institution_id}"\n')
+            inserted = True
+
+    if not inserted:
+        logger.error(f"Could not find 'open {beancount_account}' in {root_file}")
+        return
+
+    with open(root_file, 'w') as f:
+        f.writelines(new_lines)
+    logger.info(f"Added Plaid metadata to {beancount_account} in {root_file}")
+
+
+def _prompt_beancount_account_mapping(
+    root_file: str,
+    plaid_accounts: list,
+    item_id: str,
+    access_token: str,
+    institution_id: Optional[str],
+):
+    """Prompt the user to map each Plaid account to a beancount account name."""
+    entries, _, _ = loader.load_file(root_file)
+    existing_accounts = sorted(entry.account for entry in entries if isinstance(entry, Open))
+
+    print("\n" + "=" * 60)
+    print("Configure beancount account mapping")
+    print("=" * 60)
+
+    for plaid_acct in plaid_accounts:
+        acct_name = plaid_acct.get('name', 'Unknown')
+        acct_type = plaid_acct.get('type', '')
+        acct_subtype = plaid_acct.get('subtype', '')
+        acct_id = plaid_acct.get('account_id', '')
+        mask = plaid_acct.get('mask', '')
+
+        print(f"\nPlaid account: {acct_name}")
+        if acct_type or acct_subtype:
+            print(f"  Type: {acct_type}/{acct_subtype}")
+        if mask:
+            print(f"  Ending in: ****{mask}")
+        print(f"  Plaid ID: {acct_id}")
+
+        print("\nSelect a beancount account:")
+        print("  0. Create a new account")
+        for i, bc_acct in enumerate(existing_accounts, 1):
+            print(f"  {i}. {bc_acct}")
+
+        while True:
+            try:
+                sel = input("\nEnter number: ").strip()
+                idx = int(sel)
+                if idx == 0:
+                    bc_account = input("New account name (e.g. Assets:Chase:Checking): ").strip()
+                    is_new = True
+                    break
+                elif 1 <= idx <= len(existing_accounts):
+                    bc_account = existing_accounts[idx - 1]
+                    is_new = False
+                    break
+                else:
+                    print(f"Please enter 0–{len(existing_accounts)}")
+            except ValueError:
+                print("Please enter a valid number")
+            except KeyboardInterrupt:
+                print("\nSkipping this account")
+                bc_account = None
+                break
+
+        if not bc_account:
+            continue
+
+        default_short = acct_name
+        short_name = input(f"Short name [{default_short}]: ").strip() or default_short
+
+        # Derive a default transaction file path from the beancount account name
+        parts = bc_account.split(':')
+        if len(parts) >= 3:
+            default_tx = f"accounts/{parts[-2]}/{parts[-1]}.beancount"
+        elif len(parts) == 2:
+            default_tx = f"accounts/{parts[-1]}.beancount"
+        else:
+            default_tx = f"accounts/{bc_account}.beancount"
+        transaction_file = input(f"Transaction file [{default_tx}]: ").strip() or default_tx
+
+        _write_plaid_account_to_beancount(
+            root_file=root_file,
+            beancount_account=bc_account,
+            plaid_account_id=acct_id,
+            item_id=item_id,
+            access_token=access_token,
+            short_name=short_name,
+            transaction_file=transaction_file,
+            institution_id=institution_id,
+            is_new=is_new,
+        )
+        print(f"  Saved: {bc_account}")
+
+    print("\nDone configuring accounts.")
+
+
+def _add_new_bank_account(client: plaid_api.PlaidApi, root_file: str):
+    """Open Plaid Link to add a brand-new bank connection, then configure beancount mapping."""
+
+    HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Add New Bank Account</title>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Add New Bank Account</h1>
+    <p>Click the button below to connect to your bank via Plaid.</p>
+    <div id="status"></div>
+    <button id="link-button">Connect Bank</button>
+
+    <script>
+        const handler = Plaid.create({
+            token: '{{ link_token }}',
+            onSuccess: async (public_token, metadata) => {
+                document.getElementById('status').innerHTML = 'Connecting...';
+                try {
+                    const response = await fetch('/exchange_token', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ public_token: public_token })
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        document.getElementById('status').className = 'success';
+                        document.getElementById('status').innerHTML =
+                            'Bank connected! Return to your terminal to configure the account mapping.';
+                        document.getElementById('link-button').style.display = 'none';
+                    } else {
+                        document.getElementById('status').className = 'error';
+                        document.getElementById('status').innerHTML = 'Error: ' + result.error;
+                    }
+                } catch (error) {
+                    document.getElementById('status').className = 'error';
+                    document.getElementById('status').innerHTML = 'Error: ' + error;
+                }
+            },
+            onExit: (err, metadata) => {
+                if (err != null) {
+                    document.getElementById('status').className = 'error';
+                    document.getElementById('status').innerHTML = 'Error: ' + err.error_message;
+                }
+            }
+        });
+
+        document.getElementById('link-button').onclick = () => {
+            document.getElementById('status').innerHTML = '';
+            handler.open();
+        };
+    </script>
+</body>
+</html>
+    """
+
+    # Create link token for a new connection (no access_token = new item)
+    try:
+        link_request = LinkTokenCreateRequest(
+            user={"client_user_id": "user-id"},
+            client_name="Plaid2Beancount",
+            products=[Products("transactions")],
+            country_codes=[CountryCode("US")],
+            language="en",
+        )
+        link_response = client.link_token_create(link_request)
+        link_token = link_response["link_token"]
+    except Exception as e:
+        logger.error(f"Error creating link token: {e}")
+        return
+
+    connection_data: dict = {}
+    connection_event = threading.Event()
+
+    app = Flask(__name__)
+    app.logger.setLevel(logging.ERROR)
+
+    @app.route('/')
+    def index():
+        return render_template_string(HTML_TEMPLATE, link_token=link_token)
+
+    @app.route('/exchange_token', methods=['POST'])
+    def exchange_token():
+        req_data = request.get_json()
+        public_token = req_data.get('public_token')
+        try:
+            exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
+            exchange_response = client.item_public_token_exchange(exchange_request)
+            new_access_token = exchange_response["access_token"]
+            new_item_id = exchange_response["item_id"]
+
+            accounts_request = AccountsGetRequest(access_token=new_access_token)
+            accounts_response = client.accounts_get(accounts_request)
+
+            connection_data['access_token'] = new_access_token
+            connection_data['item_id'] = new_item_id
+            connection_data['accounts'] = accounts_response['accounts']
+            connection_data['institution_id'] = accounts_response.get('item', {}).get('institution_id')
+            connection_event.set()
+
+            return jsonify({"success": True})
+        except Exception as e:
+            logger.error(f"Error exchanging token: {e}")
+            return jsonify({"success": False, "error": str(e)})
+
+    port = _find_free_port()
+
+    def open_browser():
+        time.sleep(1)
+        webbrowser.open(f'http://127.0.0.1:{port}')
+
+    server_thread = threading.Thread(
+        target=lambda: app.run(host='127.0.0.1', port=port, debug=False),
+        daemon=True,
+    )
+    server_thread.start()
+    threading.Thread(target=open_browser, daemon=True).start()
+
+    logger.info(f"Starting webserver at http://127.0.0.1:{port} — connect your bank, then return here")
+    connection_event.wait()
+
+    # Give Flask a moment to send the HTTP response before we proceed
+    time.sleep(0.5)
+
+    _prompt_beancount_account_mapping(
+        root_file=root_file,
+        plaid_accounts=connection_data['accounts'],
+        item_id=connection_data['item_id'],
+        access_token=connection_data['access_token'],
+        institution_id=connection_data.get('institution_id'),
+    )
 
 
 def _display_account_info(client: plaid_api.PlaidApi, item_id: str, access_token: str, short_name: str):
@@ -1022,37 +1329,34 @@ def main():
     client = plaid_api.PlaidApi(api_client)
 
     if args.update_permissions:
-        # Extract all Plaid items from beancount file
         items = _get_plaid_items_from_beancount(args.root_file)
+        item_list = list(items.items())
+        add_new_index = len(item_list) + 1
 
-        if not items:
-            logger.error("No Plaid items found in beancount file.")
-            logger.error("Make sure your account Open directives have both 'plaid_item_id' and 'plaid_access_token' metadata.")
-            return
-
-        # Display available items
         print("\nAvailable Plaid items:")
         print("-" * 50)
-        item_list = list(items.items())
         for i, (item_id, (account_name, _, short_name)) in enumerate(item_list, 1):
             print(f"{i}. {short_name} ({account_name})")
             print(f"   Item ID: {item_id}")
+        print(f"{add_new_index}. Add a new bank account")
 
-        # Get user selection
         print("-" * 50)
         while True:
             try:
-                selection = input("\nSelect an item to update (enter number): ").strip()
+                selection = input(f"\nEnter selection (1-{add_new_index}): ").strip()
                 index = int(selection) - 1
-                if 0 <= index < len(item_list):
+                if 0 <= index < add_new_index:
                     break
-                else:
-                    print(f"Please enter a number between 1 and {len(item_list)}")
+                print(f"Please enter a number between 1 and {add_new_index}")
             except ValueError:
                 print("Please enter a valid number")
             except KeyboardInterrupt:
                 print("\nCancelled")
                 return
+
+        if index == len(item_list):
+            _add_new_bank_account(client, args.root_file)
+            return
 
         # Get selected item details
         selected_item_id, (account_name, access_token, short_name) = item_list[index]
