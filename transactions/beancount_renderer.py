@@ -107,7 +107,7 @@ class BeancountRenderer:
             sink_posting = Posting(
                 account + ":Cash", Amount(_usd(transaction.amount), "USD"), None, None, None, None
             )
-            gains_account = account.replace("Assets", "Income") + "Capital-Gains" + ticker
+            gains_account = account.replace("Assets", "Income") + ":" + ticker + ":Capital-Gains"
 
         elif kind == InvestmentKind.DIVIDEND:
             source_posting = Posting(

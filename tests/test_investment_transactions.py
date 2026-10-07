@@ -237,7 +237,7 @@ def test_sell_transaction():
     assert cash_posting.units.number == Decimal("700.00")
     assert cash_posting.units.currency == "USD"
 
-    assert gains_posting.account == "Income:Vanguard:BrokerageCapital-GainsGOOGL"
+    assert gains_posting.account == "Income:Vanguard:Brokerage:GOOGL:Capital-Gains"
     assert gains_posting.units is None
 
 
