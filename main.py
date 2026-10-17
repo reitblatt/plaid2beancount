@@ -171,7 +171,8 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
     expense_accounts = {}
     for account in accounts:
         if "plaid_category" in account.meta:
-            expense_accounts[account.meta["plaid_category"]] = account.account
+            for category in account.meta["plaid_category"].split(","):
+                expense_accounts[category.strip()] = account.account
         if "payees" in account.meta:
             payees = account.meta["payees"].split(",")
             for payee in payees:
@@ -304,13 +305,14 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                     # Log transaction details when fetched from Plaid
                     logger.debug(f"Fetched transaction from Plaid: {t['name']} - {t['amount']} for account {short_names.get(t['account_id'], 'Unknown')}")
 
-                    # Payee rule overrides Plaid category
-                    payee = t.get("merchant_name") or t.get("name")
-                    payee_lc = payee.lower() if payee else None
+                    # Payee rule overrides Plaid category. Try the raw name first since
+                    # it is more specific (e.g. "Costco Gas" vs merchant "Costco").
                     expense_account = None
-                    if payee_lc and payee_lc in expense_accounts:
-                        expense_account = expense_accounts[payee_lc]
-                    elif t["personal_finance_category"] is not None:
+                    for payee in (t.get("name"), t.get("merchant_name")):
+                        if payee and payee.lower() in expense_accounts:
+                            expense_account = expense_accounts[payee.lower()]
+                            break
+                    if expense_account is None and t["personal_finance_category"] is not None:
                         cat_data = t["personal_finance_category"]
                         expense_account = expense_accounts.get(cat_data["detailed"])
                         if expense_account is None and cat_data.get("detailed") == "INCOME_INTEREST_EARNED":
@@ -450,7 +452,11 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
                     )
                 )
         except ApiException as e:
-            logger.warning(f"Error getting investment transactions for item {item_id}: {e}")
+            # Items without the investments product (plain banks/credit cards) are expected
+            if "ADDITIONAL_CONSENT_REQUIRED" in str(e.body) or "PRODUCTS_NOT_SUPPORTED" in str(e.body):
+                logger.debug(f"Item {item_id} has no investments product, skipping")
+            else:
+                logger.warning(f"Error getting investment transactions for item {item_id}: {e}")
             continue
     
     return investment_transactions

@@ -111,3 +111,47 @@ def test_import_transactions_and_categorization():
         assert transactions[1].personal_finance_category.expense_account == "Expenses:Food:Groceries"  # category rule
     finally:
         shutil.rmtree(temp_dir) 
+
+class DummyPlaidApiRules:
+    def accounts_get(self, request):
+        return {"accounts": [{"account_id": "acc1", "type": "depository"}]}
+    def transactions_sync(self, request):
+        def txn(tid, name, merchant, detailed):
+            return {
+                "date": "2024-01-04", "name": name, "merchant_name": merchant, "amount": 20.00,
+                "account_id": "acc1", "transaction_id": tid, "pending": False,
+                "personal_finance_category": {"primary": detailed.split("_")[0], "detailed": detailed, "confidence_level": "HIGH"},
+            }
+        return {
+            "added": [
+                # Payee rule matches the raw name even though Plaid supplied a merchant name
+                txn("r1", "404 MEDIA", "X Media", "ENTERTAINMENT_OTHER_ENTERTAINMENT"),
+                # Raw name rule takes precedence over a broader merchant rule
+                txn("r2", "Costco Gas", "Costco", "TRANSPORTATION_GAS"),
+                # Each entry of a comma-separated plaid_category is a separate rule
+                txn("r3", "Requested transfer", None, "TRANSFER_OUT_ACCOUNT_TRANSFER"),
+            ],
+            "has_more": False,
+            "next_cursor": "cursor789"
+        }
+
+
+def test_payee_name_and_multi_category_rules():
+    temp_dir, root_file = create_temp_beancount_file()
+    with open(root_file, "a") as f:
+        f.write('''
+2024-01-01 open Expenses:Media
+  payees: "404 MEDIA"
+2024-01-01 open Assets:Transfer:Costco
+  payees: "Costco"
+2024-01-01 open Expenses:Gas
+  payees: "Costco Gas"
+2024-01-01 open Assets:Transfer
+  plaid_category: "TRANSFER_IN_ACCOUNT_TRANSFER, TRANSFER_OUT_ACCOUNT_TRANSFER"
+''')
+    try:
+        transactions, _ = _update_transactions(DummyPlaidApiRules(), root_file, debug=True)
+        accounts = [t.personal_finance_category.expense_account for t in transactions]
+        assert accounts == ["Expenses:Media", "Expenses:Gas", "Assets:Transfer"]
+    finally:
+        shutil.rmtree(temp_dir)

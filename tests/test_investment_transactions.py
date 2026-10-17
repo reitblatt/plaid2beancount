@@ -241,6 +241,35 @@ def test_sell_transaction():
     assert gains_posting.units is None
 
 
+
+def test_sell_transaction_plaid_signs():
+    """Plaid reports sells with negative quantity and amount; cash must still increase."""
+    security = create_test_security("META")
+    account = create_test_account()
+
+    transaction = PlaidInvestmentTransaction(
+        date=date(2024, 4, 15),
+        name="Sell",
+        quantity=Decimal("-10"),
+        price=Decimal("150.00"),
+        amount=Decimal("-1500.00"),
+        security=security,
+        fees=Decimal("0"),
+        cancel_transaction_id=None,
+        investment_transaction_id="sell_002",
+        iso_currency_code="USD",
+        type=create_test_transaction_type('sell', 'sell'),
+        account=account
+    )
+
+    renderer = BeancountRenderer([], [transaction])
+    beancount_tx = renderer._to_investment_beancount(transaction)
+
+    security_posting, cash_posting, gains_posting = beancount_tx.postings
+    assert security_posting.units.number == Decimal("-10")
+    assert cash_posting.units.number == Decimal("1500.00")
+    assert gains_posting.account == "Income:Vanguard:Brokerage:META:Capital-Gains"
+
 def test_sweep_in():
     """Test sweep in transaction (cash -> money market fund)."""
     security = create_test_security("VMFXX")  # Money market fund
@@ -373,11 +402,11 @@ def test_cash_contribution():
     cash_posting = beancount_tx.postings[1]
 
     assert transfer_posting.account == "Assets:Transfer"
-    assert transfer_posting.units.number == Decimal("4011.11")
+    assert transfer_posting.units.number == Decimal("-4011.11")
     assert transfer_posting.units.currency == "USD"
 
     assert cash_posting.account == "Assets:Vanguard:Brokerage:Cash"
-    assert cash_posting.units.number == Decimal("-4011.11")
+    assert cash_posting.units.number == Decimal("4011.11")
     assert cash_posting.units.currency == "USD"
 
 
@@ -445,11 +474,11 @@ def test_transfer_incoming():
     cash_posting = beancount_tx.postings[1]
 
     assert transfer_posting.account == "Assets:Transfer"
-    assert transfer_posting.units.number == Decimal("2000.00")
+    assert transfer_posting.units.number == Decimal("-2000.00")
     assert transfer_posting.units.currency == "USD"
 
     assert cash_posting.account == "Assets:Vanguard:Brokerage:Cash"
-    assert cash_posting.units.number == Decimal("-2000.00")
+    assert cash_posting.units.number == Decimal("2000.00")
     assert cash_posting.units.currency == "USD"
 
 
@@ -598,7 +627,7 @@ def test_sweep_out_fee_interest():
 
 
 def test_cash_deposit_transfer_in():
-    """Test cash/deposit non-sweep renders as external transfer in (positive amount)."""
+    """Test cash/deposit non-sweep renders as external transfer in (cash increases)."""
     security = create_test_security("VMFXX")
     account = create_test_account()
 
@@ -625,11 +654,11 @@ def test_cash_deposit_transfer_in():
     cash_posting = beancount_tx.postings[1]
 
     assert transfer_posting.account == "Assets:Transfer"
-    assert transfer_posting.units.number == Decimal("5000.00")
+    assert transfer_posting.units.number == Decimal("-5000.00")
     assert transfer_posting.units.currency == "USD"
 
     assert cash_posting.account == "Assets:Vanguard:Brokerage:Cash"
-    assert cash_posting.units.number == Decimal("-5000.00")
+    assert cash_posting.units.number == Decimal("5000.00")
     assert cash_posting.units.currency == "USD"
 
 
@@ -736,6 +765,7 @@ class TestVanguardInstitution:
 class TestRegistry:
     def test_vanguard_id_returns_vanguard(self):
         assert isinstance(get_institution("ins_116527"), VanguardInstitution)
+        assert isinstance(get_institution("ins_115616"), VanguardInstitution)
 
     def test_unknown_id_returns_base(self):
         assert type(get_institution("ins_unknown")) is Institution

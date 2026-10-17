@@ -5,6 +5,7 @@ from .vanguard import VanguardInstitution
 # Maps Plaid institution_id -> Institution subclass.
 # Add a new entry here when an institution needs custom classification logic.
 INSTITUTION_REGISTRY: dict = {
+    "ins_115616": VanguardInstitution,  # Vanguard (as reported by Plaid /item/get)
     "ins_116527": VanguardInstitution,  # Vanguard
 }
 

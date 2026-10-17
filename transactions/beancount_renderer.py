@@ -101,11 +101,13 @@ class BeancountRenderer:
             )
 
         elif kind == InvestmentKind.SELL:
+            # Plaid reports sells with negative quantity and negative amount (cash in),
+            # but normalise with abs() in case an institution uses positive values.
             source_posting = Posting(
-                account + ":" + ticker, Amount(-transaction.quantity, ticker), None, Amount(transaction.price, "USD"), None, None
+                account + ":" + ticker, Amount(-abs(transaction.quantity), ticker), None, Amount(transaction.price, "USD"), None, None
             )
             sink_posting = Posting(
-                account + ":Cash", Amount(_usd(transaction.amount), "USD"), None, None, None, None
+                account + ":Cash", Amount(_usd(abs(transaction.amount)), "USD"), None, None, None, None
             )
             gains_account = account.replace("Assets", "Income") + ":" + ticker + ":Capital-Gains"
 
@@ -133,10 +135,10 @@ class BeancountRenderer:
             # normalise with abs() so the beancount entry always reads the same way.
             abs_amount = abs(transaction.amount)
             source_posting = Posting(
-                "Assets:Transfer", Amount(_usd(abs_amount), "USD"), None, None, None, None
+                "Assets:Transfer", Amount(_usd(-abs_amount), "USD"), None, None, None, None
             )
             sink_posting = Posting(
-                account + ":Cash", Amount(_usd(-abs_amount), "USD"), None, None, None, None
+                account + ":Cash", Amount(_usd(abs_amount), "USD"), None, None, None, None
             )
 
         elif kind == InvestmentKind.TRANSFER_OUT:
