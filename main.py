@@ -138,6 +138,10 @@ def _parse_args_and_load_config():
     )
 
     args = parser.parse_args()
+    # Every command reads account metadata from the root beancount file
+    commands = (args.sync_transactions, args.recategorize, args.update_permissions, args.show_accounts)
+    if any(commands) and not args.root_file:
+        parser.error("--root-file is required")
     return args
 
 
