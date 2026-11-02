@@ -4,6 +4,7 @@ import argparse
 import configparser
 import os
 import socket
+import sys
 import time
 from typing import Dict, List, Optional, Tuple
 import logging
@@ -55,6 +56,17 @@ from beancount_file_utils import store_institution_id_in_beancount
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# How far before the newest transaction in a file a new transaction may be dated
+# and still be written. Late-posting transactions are legitimate, but a lost
+# cursor makes Plaid replay full history, which predates the plaid_transaction_id
+# metadata and would otherwise be re-imported as duplicates.
+LATE_POSTING_WINDOW = timedelta(days=45)
+
+
+def _custom_value(value):
+    """Unwrap a Custom directive value (beancount 3 wraps them in ValueType)."""
+    return getattr(value, "value", value)
 
 def _find_free_port(start: int = 5001) -> int:
     """Return the first TCP port >= start that is not in use on localhost."""
@@ -210,17 +222,14 @@ def _load_beancount_accounts(file_path: str) -> Tuple[Dict[str, str], Dict[str, 
             source_file = account.meta.get("filename", file_path)
             items[item_id] = (access_token, institution_id, source_file)
     
-    # Get cursors for each account
+    # Get cursors. A cursor belongs to an item and is stored under whichever of the
+    # item's accounts Plaid listed first, which need not carry the item metadata.
     cursors = {}
-    for account in accounts:
-        if "plaid_item_id" in account.meta:
-            account_cursors = {}
-            for entry in entries:
-                if isinstance(entry, Custom) and entry.type == "plaid_cursor" and entry.values[0] == account.account:
-                    account_cursors[entry.values[2]] = entry.values[1]  # item_id -> cursor
-            if account_cursors:
-                cursors[account.account] = account_cursors
-    
+    for entry in entries:
+        if isinstance(entry, Custom) and entry.type == "plaid_cursor":
+            account_name = _custom_value(entry.values[0])
+            cursors.setdefault(account_name, {})[_custom_value(entry.values[2])] = _custom_value(entry.values[1])
+
     return short_names, expense_accounts, items, cursors, transaction_files
 
 
@@ -245,8 +254,18 @@ def _get_or_create_category(primary: str, detailed: str, description: str, expen
     )
 
 
-def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool = False) -> Tuple[List[PlaidTransaction], List[Custom]]:
-    """Fetch transactions from Plaid and convert them to PlaidTransaction objects."""
+def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool = False,
+                         failures: Optional[List[str]] = None,
+                         removed_ids: Optional[set] = None) -> Tuple[List[PlaidTransaction], List[Custom]]:
+    """Fetch posted transactions from Plaid and convert them to PlaidTransaction objects.
+
+    Pending transactions are skipped: Plaid replaces each one with a new posted
+    transaction under a different ID, and sends the posted one as "added" when it
+    settles. Items that could not be synced are appended to `failures`; IDs Plaid
+    reports as removed are added to `removed_ids`.
+    """
+    failures = failures if failures is not None else []
+    removed_ids = removed_ids if removed_ids is not None else set()
     transactions = []
     cursor_directives = []
     short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
@@ -275,8 +294,10 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
         except ApiException as e:
             if e.status == 400 and "ITEM_LOGIN_REQUIRED" in str(e):
                 logger.error(f"Item {item_id} needs reauthorization. Please use Plaid Link to update it.")
+                failures.append(f"{item_id}: ITEM_LOGIN_REQUIRED")
             else:
                 logger.error(f"Error getting accounts for item {item_id}: {e}")
+                failures.append(f"{item_id}: accounts_get failed ({e.status})")
             continue
 
         # Find any beancount account name associated with this item (for cursor storage)
@@ -305,7 +326,16 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                 has_more = response["has_more"]
                 cursor = response["next_cursor"]
 
+                removed_ids.update(t["transaction_id"] for t in response.get("removed", []))
+                for t in response.get("modified", []):
+                    if not t.get("pending"):
+                        logger.warning(f"Plaid modified posted transaction {t['transaction_id']} ({t['date']} {t['name']} {t['amount']}); not updated in the ledger")
+
                 for t in plaid_transactions:
+                    if t.get("pending"):
+                        logger.debug(f"Skipping pending transaction: {t['name']}")
+                        continue
+
                     # Log transaction details when fetched from Plaid
                     logger.debug(f"Fetched transaction from Plaid: {t['name']} - {t['amount']} for account {short_names.get(t['account_id'], 'Unknown')}")
 
@@ -363,7 +393,7 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                         transaction_id=t["transaction_id"],
                         account=account,
                         personal_finance_category=category,
-                        personal_finance_confidence=t.get("personal_finance_category", {}).get("confidence_level", "UNKNOWN"),
+                        personal_finance_confidence=(t.get("personal_finance_category") or {}).get("confidence_level", "UNKNOWN"),
                         pending=t["pending"]
                     )
                     transactions.append(transaction)
@@ -383,13 +413,15 @@ def _update_transactions(client: plaid_api.PlaidApi, root_file: str, debug: bool
                     cursor_directives.append(cursor_directive)
             except ApiException as e:
                 logger.error(f"Error fetching transactions for item {item_id}: {e}")
+                failures.append(f"{item_id}: transactions_sync failed ({e.status})")
                 break
             if debug:
                 break  # Only retrieve the first batch of transactions in debug mode
     return transactions, cursor_directives
 
 
-def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[PlaidInvestmentTransaction]:
+def _update_investments(client: plaid_api.PlaidApi, root_file: str,
+                        failures: Optional[List[str]] = None) -> List[PlaidInvestmentTransaction]:
     """Update investment transactions for all items."""
     # Load accounts and cursors
     short_names, expense_accounts, items, cursors, transaction_files = _load_beancount_accounts(root_file)
@@ -461,9 +493,38 @@ def _update_investments(client: plaid_api.PlaidApi, root_file: str) -> List[Plai
                 logger.debug(f"Item {item_id} has no investments product, skipping")
             else:
                 logger.warning(f"Error getting investment transactions for item {item_id}: {e}")
+                if failures is not None:
+                    failures.append(f"{item_id}: investments_transactions_get failed ({e.status})")
             continue
     
     return investment_transactions
+
+
+def _remove_transactions_from_ledger(root_file: str, removed_ids: set) -> int:
+    """Delete still-unreviewed ('!') transactions Plaid has removed.
+
+    Reviewed ('*') transactions are left in place with a warning.
+    """
+    entries, _, _ = loader.load_file(root_file)
+    to_delete: Dict[str, List[int]] = {}
+    for entry in entries:
+        if isinstance(entry, data.Transaction) and entry.meta.get("plaid_transaction_id") in removed_ids:
+            if entry.flag == "!":
+                to_delete.setdefault(entry.meta["filename"], []).append(entry.meta["lineno"])
+            else:
+                logger.warning(f"Plaid removed reviewed transaction {entry.date} {entry.payee}; left in ledger")
+
+    for file_name, line_numbers in to_delete.items():
+        with open(file_name) as f:
+            lines = f.readlines()
+        for lineno in sorted(line_numbers, reverse=True):
+            end = lineno
+            while end < len(lines) and lines[end].strip():
+                end += 1
+            del lines[lineno - 1:min(end + 1, len(lines))]
+        with open(file_name, "w") as f:
+            f.writelines(lines)
+    return sum(len(v) for v in to_delete.values())
 
 
 def _write_transactions_to_file(transactions: List[PlaidTransaction], file_path: str):
@@ -1423,8 +1484,10 @@ def main():
 
     if args.sync_transactions:
         # Fetch transactions
-        transactions, cursor_directives = _update_transactions(client, args.root_file, args.debug)        
-        investment_transactions = _update_investments(client, args.root_file)
+        failures: List[str] = []
+        removed_ids: set = set()
+        transactions, cursor_directives = _update_transactions(client, args.root_file, args.debug, failures, removed_ids)
+        investment_transactions = _update_investments(client, args.root_file, failures)
         
         # Generate Beancount entries
         from transactions.beancount_renderer import BeancountRenderer
@@ -1470,38 +1533,49 @@ def main():
         
         # Write transactions to their respective account files
         base_dir = os.path.dirname(os.path.abspath(args.root_file))
+
+        # Dedupe against the whole ledger: entries may have been moved between files.
+        ledger_entries, _, _ = loader.load_file(args.root_file)
+        existing_transaction_ids = {
+            entry.meta["plaid_transaction_id"]
+            for entry in ledger_entries
+            if isinstance(entry, data.Transaction) and "plaid_transaction_id" in entry.meta
+        }
+        # Items not synced this run keep their stored cursors.
+        stored_cursors = [
+            entry for entry in ledger_entries
+            if isinstance(entry, Custom) and entry.type == "plaid_cursor"
+        ]
+
         for file_path, account_transactions in account_entries.items():
             logger.info(f"Looking for transactions to write for {file_path}")
             # Ensure the full path exists
             full_path = os.path.join(base_dir, file_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
             
-            # Find the newest transaction date and collect existing transaction IDs
+            # Find the newest imported transaction in this file
             newest_date = None
-            existing_transaction_ids = set()
             if os.path.exists(full_path):
                 entries, errors, options = loader.load_file(full_path)
                 if errors:
                     logger.debug(f"Validation errors loading {full_path} (expected when loading individual files): {errors}")
-                
-                # Find the newest transaction and collect all transaction IDs
+
                 for entry in entries:
                     if isinstance(entry, data.Transaction) and entry.meta and 'plaid_transaction_id' in entry.meta:
                         if newest_date is None or entry.date > newest_date:
                             newest_date = entry.date
-                        existing_transaction_ids.add(entry.meta['plaid_transaction_id'])
-            
-            # Filter transactions to only include those newer than the newest existing transaction
-            # and not already in the file
+
+            # Only the transaction ID decides whether a transaction is new: late
+            # postings are routinely dated before the newest existing transaction.
             new_transactions = []
-            if newest_date is None:
-                new_transactions = account_transactions
-            else:
-                for transaction in account_transactions:
-                    if (transaction.date > newest_date and 
-                        transaction.meta.get('plaid_transaction_id') not in existing_transaction_ids):
-                        new_transactions.append(transaction)
-            
+            for transaction in account_transactions:
+                if transaction.meta.get('plaid_transaction_id') in existing_transaction_ids:
+                    continue
+                if newest_date is not None and transaction.date < newest_date - LATE_POSTING_WINDOW:
+                    logger.warning(f"Skipping transaction older than the late-posting window: {transaction.date} {transaction.payee} in {file_path}")
+                    continue
+                new_transactions.append(transaction)
+
             # Write new transactions to file
             if new_transactions:
                 # Sort transactions by date in ascending order
@@ -1514,25 +1588,17 @@ def main():
         # Write cursor directives to file
         cursors_file = os.path.join(base_dir, "plaid_cursors.beancount")
         with open(cursors_file, 'w') as f:
-            # Group cursor directives by account
-            account_cursors = {}
+            # One cursor per item. Stored cursors are kept for items that were not
+            # synced this run, so a failed item resumes where it left off.
+            # Investment transactions have no cursor: their endpoint is date-based.
+            synced_items = {directive.values[2][0] for directive in cursor_directives}
+            account_cursors = {
+                _custom_value(directive.values[2]): directive
+                for directive in stored_cursors
+                if _custom_value(directive.values[2]) not in synced_items
+            }
             for directive in cursor_directives:
-                account = directive.values[0][0]
-                if account not in account_cursors or directive.date > account_cursors[account].date:
-                    account_cursors[account] = directive
-
-            # Store cursors for investment transactions
-            for transaction in investment_transactions:
-                cursor_directive = Custom(
-                    date=date.today(),
-                    meta={"plaid_transaction_id": f"cursor_{date.today()}"},
-                    type="plaid_cursor",
-                    values=[(transaction.account.beancount_name, "string"), (transaction.investment_transaction_id, "string"), (transaction.account.item.item_id, "string")]
-                )
-                # Update account cursors with investment transaction cursors
-                account = transaction.account.beancount_name
-                if account not in account_cursors or cursor_directive.date > account_cursors[account].date:
-                    account_cursors[account] = cursor_directive
+                account_cursors[directive.values[2][0]] = directive
 
             # Write only the latest cursor for each account
             for directive in account_cursors.values():
@@ -1540,6 +1606,15 @@ def main():
                 f.write(printer.format_entry(directive) + '\n')
 
         logger.info(f"Successfully synced {len(account_cursors)} cursors to {cursors_file}")
+
+        if removed_ids:
+            removed_count = _remove_transactions_from_ledger(args.root_file, removed_ids)
+            logger.info(f"Removed {removed_count} transactions Plaid no longer reports")
+
+        if failures:
+            for failure in failures:
+                logger.error(f"Sync failed for item {failure}")
+            sys.exit(1)
 
     if args.recategorize:
         recategorized_count = _recategorize_transactions(args.root_file, args.start_date, args.end_date)
