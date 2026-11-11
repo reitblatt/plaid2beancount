@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 import argparse
+import re
 import configparser
 import os
 import socket
@@ -51,7 +52,7 @@ from beancount.parser import parser
 from beancount import loader
 
 from plaid_models import PlaidTransaction, PlaidInvestmentTransaction, PlaidSecurity, PlaidInvestmentTransactionType, Account, FinanceCategory, PlaidItem, PlaidCursor
-from beancount_file_utils import store_institution_id_in_beancount
+from beancount_file_utils import store_institution_id_in_beancount, find_open_files
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -569,6 +570,7 @@ def _get_plaid_items_from_beancount(root_file: str) -> Dict[str, Tuple[str, str,
 
 def _update_access_token_in_beancount(root_file: str, account_name: str, new_access_token: str):
     """Update the access token for an account in the beancount file."""
+    root_file = find_open_files(root_file, account=account_name)[0]
     with open(root_file, 'r') as f:
         lines = f.readlines()
 
@@ -770,9 +772,11 @@ def _write_plaid_account_to_beancount(
         with open(root_file, 'a') as f:
             f.writelines(lines_to_append)
         logger.info(f"Appended new Open directive for {beancount_account} in {root_file}")
-        return
+        return True
 
-    # Existing account: insert metadata after the `open <account>` line
+    # Existing account: insert metadata after the `open <account>` line,
+    # in whichever included file declares it
+    root_file = find_open_files(root_file, account=beancount_account)[0]
     with open(root_file, 'r') as f:
         lines = f.readlines()
 
@@ -780,7 +784,7 @@ def _write_plaid_account_to_beancount(
     inserted = False
     for line in lines:
         new_lines.append(line)
-        if not inserted and f"open {beancount_account}" in line:
+        if not inserted and re.search(rf"\bopen {re.escape(beancount_account)}(\s|$)", line):
             new_lines.append(f'  plaid_account_id: "{plaid_account_id}"\n')
             new_lines.append(f'  plaid_item_id: "{item_id}"\n')
             new_lines.append(f'  plaid_access_token: "{access_token}"\n')
@@ -791,12 +795,22 @@ def _write_plaid_account_to_beancount(
             inserted = True
 
     if not inserted:
-        logger.error(f"Could not find 'open {beancount_account}' in {root_file}")
-        return
+        logger.error(
+            f"Could not find 'open {beancount_account}' in {root_file}. "
+            "Add this metadata to its Open directive by hand:\n"
+            f'  plaid_account_id: "{plaid_account_id}"\n'
+            f'  plaid_item_id: "{item_id}"\n'
+            f'  plaid_access_token: "{access_token}"\n'
+            f'  transaction_file: "{transaction_file}"\n'
+            f'  short_name: "{short_name}"'
+            + (f'\n  plaid_institution_id: "{institution_id}"' if institution_id else "")
+        )
+        return False
 
     with open(root_file, 'w') as f:
         f.writelines(new_lines)
     logger.info(f"Added Plaid metadata to {beancount_account} in {root_file}")
+    return True
 
 
 def _prompt_beancount_account_mapping(
@@ -870,7 +884,7 @@ def _prompt_beancount_account_mapping(
             default_tx = f"accounts/{bc_account}.beancount"
         transaction_file = input(f"Transaction file [{default_tx}]: ").strip() or default_tx
 
-        _write_plaid_account_to_beancount(
+        saved = _write_plaid_account_to_beancount(
             root_file=root_file,
             beancount_account=bc_account,
             plaid_account_id=acct_id,
@@ -881,7 +895,7 @@ def _prompt_beancount_account_mapping(
             institution_id=institution_id,
             is_new=is_new,
         )
-        print(f"  Saved: {bc_account}")
+        print(f"  Saved: {bc_account}" if saved else f"  NOT saved: {bc_account} (see error above)")
 
     print("\nDone configuring accounts.")
 
