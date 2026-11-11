@@ -605,6 +605,15 @@ def _update_access_token_in_beancount(root_file: str, account_name: str, new_acc
     logger.info(f"Updated access token for {account_name} in {root_file}")
 
 
+def _item_has_investment_accounts(client: plaid_api.PlaidApi, access_token: str) -> bool:
+    """True if any account on the item is an investment account."""
+    try:
+        response = client.accounts_get(AccountsGetRequest(access_token=access_token))
+    except ApiException:
+        return False
+    return any(str(a["type"]) == "investment" for a in response["accounts"])
+
+
 def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str, item_id: str,
                                      account_name: str, access_token: str, short_name: str):
     """Start Flask server for updating Plaid item permissions."""
@@ -674,8 +683,13 @@ def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str,
     app = Flask(__name__)
     app.logger.setLevel(logging.ERROR)  # Suppress Flask logs
 
-    # Create link token for update mode
+    # Create link token for update mode. Items with investment accounts also
+    # need consent for the investments product, or investment sync is skipped
+    # with ADDITIONAL_CONSENT_REQUIRED.
     try:
+        extra = {}
+        if _item_has_investment_accounts(client, access_token):
+            extra["additional_consented_products"] = [Products("investments")]
         link_request = LinkTokenCreateRequest(
             user={"client_user_id": "user-id"},
             client_name="Plaid2Beancount",
@@ -685,7 +699,8 @@ def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str,
             access_token=access_token,
             update=LinkTokenCreateRequestUpdate(
                 account_selection_enabled=False
-            )
+            ),
+            **extra,
         )
         link_response = client.link_token_create(link_request)
         link_token = link_response["link_token"]
@@ -971,6 +986,9 @@ def _add_new_bank_account(client: plaid_api.PlaidApi, root_file: str):
             user={"client_user_id": "user-id"},
             client_name="Plaid2Beancount",
             products=[Products("transactions")],
+            # Brokerage and retirement accounts sync through the investments
+            # product; optional so plain banks can still be linked.
+            optional_products=[Products("investments")],
             country_codes=[CountryCode("US")],
             language="en",
         )
