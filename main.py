@@ -729,16 +729,18 @@ def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str,
             )
             exchange_response = client.item_public_token_exchange(exchange_request)
             new_access_token = exchange_response["access_token"]
-
-            # Update the beancount file
-            _update_access_token_in_beancount(root_file, account_name, new_access_token)
-
-            logger.info(f"Successfully updated access token for {short_name}")
-            return jsonify({"success": True})
         except Exception as e:
-            logger.error(f"Error exchanging token: {e}")
-            return jsonify({"success": False, "error": str(e)})
+            # Update mode keeps the item's existing access token, so a failed
+            # exchange is not an error: the update has already been applied.
+            logger.info(f"No new access token from update ({e}); keeping the existing one")
+        else:
+            if new_access_token != access_token:
+                _update_access_token_in_beancount(root_file, account_name, new_access_token)
+        logger.info(f"Successfully updated permissions for {short_name}")
+        done_event.set()
+        return jsonify({"success": True})
 
+    done_event = threading.Event()
     port = _find_free_port()
 
     # Open browser automatically
@@ -746,12 +748,21 @@ def _start_update_permissions_server(client: plaid_api.PlaidApi, root_file: str,
         time.sleep(1)
         webbrowser.open(f'http://127.0.0.1:{port}')
 
+    # Serve from a daemon thread so the process can exit once Link succeeds
+    threading.Thread(
+        target=lambda: app.run(host='127.0.0.1', port=port, debug=False),
+        daemon=True,
+    ).start()
     threading.Thread(target=open_browser, daemon=True).start()
 
-    # Run the server
-    logger.info(f"Starting webserver at http://127.0.0.1:{port}")
-    logger.info("Press Ctrl+C to stop the server after completing the update")
-    app.run(host='127.0.0.1', port=port, debug=False)
+    logger.info(f"Starting webserver at http://127.0.0.1:{port} (Ctrl+C to cancel)")
+    try:
+        done_event.wait()
+    except KeyboardInterrupt:
+        logger.info("Cancelled")
+        return
+    # Give Flask a moment to send the HTTP response before exiting
+    time.sleep(0.5)
 
 
 def _write_plaid_account_to_beancount(
