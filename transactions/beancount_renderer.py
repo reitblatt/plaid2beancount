@@ -16,6 +16,20 @@ logger = logging.getLogger(__name__)
 
 _TWO_PLACES = Decimal('0.01')
 
+def _is_cash_like(security) -> bool:
+    """Money market funds trade at a fixed $1 and need no lot tracking.
+
+    Plaid's flag isn't always set, so also treat tickers ending in XX (the
+    convention for money market mutual funds, e.g. VMFXX) as cash.
+    """
+    ticker = security.ticker_symbol or ""
+    return bool(security.is_cash_equivalent) or security.type == "cash" or (len(ticker) == 5 and ticker.endswith("XX"))
+
+
+# `{}` on a sell: let the account's booking method pick the lots.
+_ANY_LOT = CostSpec(None, None, None, None, None, False)
+
+
 def _usd(value: Decimal) -> Decimal:
     """Ensure a USD total amount has at least 2 decimal places."""
     if value.as_tuple().exponent > -2:
@@ -96,15 +110,25 @@ class BeancountRenderer:
             )
             quantity = transaction.quantity or transaction.amount
             price = transaction.price or Decimal('1.0')
-            sink_posting = Posting(
-                account + ":" + ticker, Amount(quantity, ticker), None, Amount(price, "USD"), None, None
-            )
+            if kind == InvestmentKind.BUY and not _is_cash_like(transaction.security):
+                # Record the purchase price as the lot's cost basis, not just a price,
+                # so later sells can be booked against it and gains computed.
+                sink_posting = Posting(
+                    account + ":" + ticker, Amount(quantity, ticker),
+                    CostSpec(price, None, "USD", None, None, False), None, None, None
+                )
+            else:
+                sink_posting = Posting(
+                    account + ":" + ticker, Amount(quantity, ticker), None, Amount(price, "USD"), None, None
+                )
 
         elif kind == InvestmentKind.SELL:
             # Plaid reports sells with negative quantity and negative amount (cash in),
             # but normalise with abs() in case an institution uses positive values.
             source_posting = Posting(
-                account + ":" + ticker, Amount(-abs(transaction.quantity), ticker), None, Amount(transaction.price, "USD"), None, None
+                account + ":" + ticker, Amount(-abs(transaction.quantity), ticker),
+                None if _is_cash_like(transaction.security) else _ANY_LOT,
+                Amount(transaction.price, "USD"), None, None
             )
             sink_posting = Posting(
                 account + ":Cash", Amount(_usd(abs(transaction.amount)), "USD"), None, None, None, None

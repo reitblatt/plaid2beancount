@@ -196,8 +196,10 @@ def test_buy_transaction():
     assert security_posting.account == "Assets:Vanguard:Brokerage:AAPL"
     assert security_posting.units.number == Decimal("10")
     assert security_posting.units.currency == "AAPL"
-    assert security_posting.price.number == Decimal("150.00")
-    assert security_posting.price.currency == "USD"
+    assert security_posting.cost.number_per == Decimal("150.00")
+    assert security_posting.cost.currency == "USD"
+    assert security_posting.price is None
+    assert "10 AAPL {150.00 USD}" in renderer.print()[0]
 
 
 def test_sell_transaction():
@@ -239,6 +241,7 @@ def test_sell_transaction():
 
     assert gains_posting.account == "Income:Vanguard:Brokerage:GOOGL:Capital-Gains"
     assert gains_posting.units is None
+    assert "-5 GOOGL {} @ 140.00 USD" in renderer.print()[0]
 
 
 
@@ -856,3 +859,46 @@ class TestStoreInstitutionId:
         original_content = open(path).read()
         store_institution_id_in_beancount(path, "nonexistent_item", "ins_116527")
         assert open(path).read() == original_content
+
+
+def test_money_market_buy_keeps_price():
+    """Reinvesting into a money market fund needs no lot: keep the plain price."""
+    security = create_test_security("VMFXX")
+    transaction = PlaidInvestmentTransaction(
+        date=date(2024, 8, 30),
+        name="Reinvestment",
+        quantity=Decimal("8.64"),
+        price=Decimal("1.0"),
+        amount=Decimal("8.64"),
+        security=security,
+        fees=Decimal("0"),
+        cancel_transaction_id=None,
+        investment_transaction_id="mm_001",
+        iso_currency_code="USD",
+        type=create_test_transaction_type('buy', 'buy'),
+        account=create_test_account()
+    )
+    beancount_tx = BeancountRenderer([], [transaction])._to_investment_beancount(transaction)
+    security_posting = beancount_tx.postings[1]
+    assert security_posting.cost is None
+    assert security_posting.price.number == Decimal("1.0")
+
+
+def test_money_market_sell_has_no_lot():
+    security = create_test_security("VMFXX")
+    transaction = PlaidInvestmentTransaction(
+        date=date(2026, 2, 24),
+        name="Sell (exchange)",
+        quantity=Decimal("-100"),
+        price=Decimal("1.0"),
+        amount=Decimal("-100"),
+        security=security,
+        fees=Decimal("0"),
+        cancel_transaction_id=None,
+        investment_transaction_id="mm_002",
+        iso_currency_code="USD",
+        type=create_test_transaction_type('sell', 'sell'),
+        account=create_test_account()
+    )
+    beancount_tx = BeancountRenderer([], [transaction])._to_investment_beancount(transaction)
+    assert beancount_tx.postings[0].cost is None
